@@ -1,5 +1,6 @@
 #include "config.h"
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstdio>
 #include <fstream>
@@ -81,6 +82,15 @@ bool Config::load(const std::string& path) {
             else if (k == "VSync") vsync = parse_bool(v, vsync);
             else if (k == "Widescreen") widescreen = parse_bool(v, widescreen);
             else if (k == "WidescreenEverywhere") wide_everywhere = parse_bool(v, wide_everywhere);
+        } else if (section == "Cheats") {
+            if (k == "Enabled") {
+                cheats.clear();
+                std::string key;
+                for (char ch : v + ",") {
+                    if (ch == ',' || ch == ' ') { if (!key.empty()) cheats.insert(key); key.clear(); }
+                    else key += char(std::tolower(static_cast<unsigned char>(ch)));
+                }
+            } else if (k == "Codes") cheat_codes = v;
         } else if (section == "Achievements") {
             if (k == "Enabled") achievements = parse_bool(v, achievements);
         } else if (section == "Audio") {
@@ -137,6 +147,11 @@ bool Config::save(const std::string& path) const {
     std::fprintf(f, "[Audio]\nEnabled = %s\nVolume = %d\n", audio ? "true" : "false", volume);
     std::fprintf(f, "# Music from files in Mods/Music (e.g. 05.wav), in percent of Volume\n");
     std::fprintf(f, "ModMusicVolume = %d\n\n", mod_music_volume);
+    std::fprintf(f, "[Cheats]\n# Built-in: rings, speed (also in OPTIONS > CHEATS). Codes: Action Replay codes,\n");
+    std::fprintf(f, "# e.g. FFE009:63 + FFADFC:01. Awards and time attack records are not earned with any on.\n");
+    std::string enabled;
+    for (const auto& k : cheats) enabled += (enabled.empty() ? "" : ", ") + k;
+    std::fprintf(f, "Enabled = %s\nCodes = %s\n\n", enabled.c_str(), cheat_codes.c_str());
     std::fprintf(f, "[Achievements]\n# Local achievements from assets/achievements.ini (nothing leaves this machine)\n");
     std::fprintf(f, "Enabled = %s\n\n", achievements ? "true" : "false");
     std::fprintf(f, "[Input]\n# Auto | On | Off\nTouchControls = %s\n", touch == TouchMode::On ? "On" : touch == TouchMode::Off ? "Off" : "Auto");

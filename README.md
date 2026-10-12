@@ -203,6 +203,14 @@ second player on the partner. The character ones want TIME ATTACK, which is
 how you reach a character the game would otherwise have chosen for you. Each
 was checked by driving the game to it rather than by reading the conditions.
 
+## Cheats
+
+OPTIONS > CHEATS has 99 RINGS and SPEED SHOES, and `[Cheats] Codes` in the
+config takes Action Replay codes (`FFE009:63`). Game Genie codes are not
+supported: they patch the ROM's instructions, which the recompiled code does
+not read. Achievements and time attack records pause while any cheat is on.
+See [docs/CHEATS.md](docs/CHEATS.md).
+
 ## Music replacement
 
 Put WAV files in `Mods/Music` in the user data folder (created on first run),

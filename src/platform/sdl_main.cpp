@@ -17,6 +17,7 @@
 #include "platform/menu.h"
 #include "platform/ui.h"
 #include "game/achievements.h"
+#include "game/cheats.h"
 #include "game/recomp_dispatch.h"
 #include "input/input.h"
 #include "input/touch_controls.h"
@@ -108,6 +109,8 @@ struct App {
     // ones it asked for the run is over -- and the level clock at that moment
     // is the time.
     time_attack::Run ta;
+    bool ta_cheated = false;  // a cheat was on during the current run
+    bool cheating = false;    // one is on this frame
     // Every frame's pad is kept, so a session can be replayed exactly, headless,
     // and looked at afterwards. What the game does when a run is finished at
     // the goal is not something a script can reach, so the only way to study it
@@ -452,13 +455,25 @@ uint16_t stage_kick_button(App& app) {
 // Watches a time attack run; called once per emulated frame. The game just
 // moves the player on when a run ends, so the frontend takes the time and puts
 // itself back instead, which is where the player came from.
+// Issue #20: the cheats switched on, set before each frame.
+void apply_cheats(App& app) {
+    std::vector<cheats::Write> writes;
+    for (const auto& c : cheats::builtin())
+        if (app.cfg.cheats.count(c.key)) writes.insert(writes.end(), c.writes.begin(), c.writes.end());
+    if (!app.cfg.cheat_codes.empty()) cheats::parse_codes(app.cfg.cheat_codes, writes);
+    app.cheating = !writes.empty();
+    if (app.cheating && app.ta.running) app.ta_cheated = true;
+    cheats::apply(*app.m, writes);
+}
+
 void follow_time_attack(App& app) {
     if (!app.ta.update(*app.m)) return;
     const int frames = app.ta.time;
     const bool ran_out = app.ta.timed_out();
     const bool timed = app.ta.timed() && !ran_out;
-    const bool best = timed && record_best(app.cfg, app.ta.request.place,
-                                           app.ta.request.level, frames);
+    const bool cheated = app.ta_cheated;
+    const bool best = timed && !cheated && record_best(app.cfg, app.ta.request.place,
+                                                       app.ta.request.level, frames);
     // Straight to disk, the way an unlocked achievement is. Waiting for a
     // clean exit loses the record if the program does not get one.
     if (best) app.cfg.save(app.store.config_file());
@@ -469,6 +484,7 @@ void follow_time_attack(App& app) {
                                          : "TIME " + stage_select::format_time(frames);
     const std::string note = ran_out  ? "The level's own limit ran out."
                              : !timed ? "This level does not keep a clock."
+                             : cheated ? "Cheats were on: not recorded."
                              : best   ? "A new best for this stage."
                                       : "Not a new best.";
     app.toasts.push_back({title, note, SDL_GetTicks() + 6000});
@@ -724,6 +740,7 @@ int main(int argc, char** argv) {
             app.inject_start = 0;
             app.stage_kick = 0;
             app.ta.begin(r);
+            app.ta_cheated = false;
             app.recorded_stages.push_back({app.m->frame_count, r, app.m->wide_extra,
                                            app.m->wide_extra_bottom, app.cfg.six_button});
         };
@@ -1000,12 +1017,13 @@ int main(int argc, char** argv) {
             app.m->input.pad[0] = uint16_t(buttons | scripted);
             app.recorded.push_back(uint32_t(uint16_t(buttons | scripted)) | uint32_t(raw2) << 16);
             app.m->input.pad[1] = raw2;
+            apply_cheats(app);
             const size_t first_sample = app.m->audio_out.size();
             app.m->run_frame();
             app.music.set_volume(app.cfg.mod_music_volume);
             app.music.after_frame(*app.m, first_sample);
             follow_time_attack(app);
-            if (app.achievements_on) {
+            if (app.achievements_on && !app.cheating) {
                 app.achievements.update(*app.m, [&](const achievements::Achievement& a) {
                     app.toasts.push_back({a.title, a.description, SDL_GetTicks() + 5000});
                     app.achievements.save_progress(achievements_progress_path(app));

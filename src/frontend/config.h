@@ -3,6 +3,7 @@
 #pragma once
 #include "renderer/viewport.h"
 #include <map>
+#include <set>
 #include <string>
 
 namespace chaotix {
@@ -62,6 +63,10 @@ struct Config {
     bool ta_two_players = false;
     // Best time per stage, in level-clock frames, keyed "<place>.<level>".
     std::map<std::string, int> ta_best;
+    // [Cheats] (game/cheats.h): the built-in ones switched on, by key, and
+    // Action Replay codes of the player's own ("FFE009:63 + FFADFC:01").
+    std::set<std::string> cheats;
+    std::string cheat_codes;
     // [Debug]
     bool debug_overlay = false;
     bool use_recompiled = true;

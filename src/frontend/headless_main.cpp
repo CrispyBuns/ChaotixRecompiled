@@ -10,6 +10,7 @@
 #include "cpu/sh2/sh2_interp.h"
 #include "cpu/sh2/sh2_ops.h"
 #include "game/achievements.h"
+#include "game/cheats.h"
 #include "game/recomp_dispatch.h"
 #include "renderer/image_io.h"
 #include "runtime/log.h"
@@ -177,6 +178,7 @@ int main(int argc, char** argv) {
     // one that flickered back to 4:3 part way through.
     bool trace_wide = false;
     bool wide_everywhere = false;  // also widen the scenes kept 4:3
+    std::vector<cheats::Write> cheat_writes;  // --cheat, set before every frame
     uint64_t wide_live_frames = 0;
     int wide_stretches = 0;
     bool wide_was_live = false;
@@ -283,6 +285,14 @@ int main(int argc, char** argv) {
         else if (a == "--wide-bottom") wide_bottom = std::atoi(next().c_str());
         else if (a == "--trace-wide") trace_wide = true;
         else if (a == "--wide-everywhere") wide_everywhere = true;
+        else if (a == "--cheat") {
+            // A built-in cheat by its key, or Action Replay codes.
+            const std::string c = next();
+            bool known = false;
+            for (const auto& b : cheats::builtin())
+                if (c == b.key) { cheat_writes.insert(cheat_writes.end(), b.writes.begin(), b.writes.end()); known = true; }
+            if (!known && !cheats::parse_codes(c, cheat_writes)) { std::fprintf(stderr, "bad --cheat %s\n", c.c_str()); return 2; }
+        }
         else if (a == "--wide-at") {
             const std::vector<std::string> parts = split(next(), ':');
             if (parts.size() >= 2) {
@@ -571,6 +581,8 @@ int main(int argc, char** argv) {
                 m->wram[p.addr] = p.value;
                 if (ref) ref->wram[p.addr] = p.value;
             }
+        cheats::apply(*m, cheat_writes);
+        if (ref) cheats::apply(*ref, cheat_writes);
         const size_t first_sample = m->audio_out.size();
         m->run_frame();
         if (!music_dir.empty()) music.after_frame(*m, first_sample);

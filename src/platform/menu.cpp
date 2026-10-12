@@ -10,6 +10,7 @@
 
 #include "frontend/config.h"
 #include "game/achievements.h"
+#include "game/cheats.h"
 
 namespace chaotix {
 
@@ -39,7 +40,7 @@ bool Menu::is_row_page(Page p) { return p == Page::Main; }
 
 bool Menu::is_list_page(Page p) {
     return p == Page::Front || p == Page::Options || p == Page::Controls || p == Page::Keys ||
-           p == Page::TimeAttack;
+           p == Page::TimeAttack || p == Page::Cheats;
 }
 
 void Menu::set_page(Page p) {
@@ -56,6 +57,7 @@ void Menu::set_page(Page p) {
     else if (p == Page::Controls) build_controls();
     else if (p == Page::Keys) build_keys();
     else if (p == Page::TimeAttack) build_time_attack();
+    else if (p == Page::Cheats) build_cheats();
     else items_.clear();
 }
 
@@ -70,6 +72,7 @@ void Menu::show_achievements() { set_page(Page::Achievements); }
 bool Menu::show_page(const std::string& name) {
     if (name == "front") set_page(Page::Front);
     else if (name == "timeattack") set_page(Page::TimeAttack);
+    else if (name == "cheats") set_page(Page::Cheats);
     else if (name == "controls") set_page(Page::Controls);
     else if (name == "keys1" || name == "keys2" || name == "pad1" || name == "pad2") {
         keys_pad_ = name.rfind("pad", 0) == 0;
@@ -92,6 +95,7 @@ std::string Menu::page_name() const {
     case Page::Keys: return "keys";
     case Page::TimeAttack: return "timeattack";
     case Page::Achievements: return "awards";
+    case Page::Cheats: return "cheats";
     default: return "";
     }
 }
@@ -389,6 +393,9 @@ void Menu::build_options() {
     items_.push_back({"6-BUTTON PAD",
                       [c] { return on_off(c->six_button); },
                       [c](int s) { if (s) c->six_button = !c->six_button; }});
+    items_.push_back({"CHEATS", [c] { return c->cheats.empty() && c->cheat_codes.empty() ? std::string("OFF") : std::string("ON"); },
+                      [this](int step) { if (step == 0) set_page(Page::Cheats); }});
+    items_.back().pressed = true;
     items_.push_back({"AWARDS",
                       [c] { return on_off(c->achievements); },
                       [c](int s) { if (s) c->achievements = !c->achievements; }});
@@ -406,6 +413,36 @@ void Menu::build_options() {
     reset.pressed = true;
     items_.push_back(std::move(reset));
     items_.push_back({"BACK", {}, [this](int) { const Page back = return_to_; set_page(back); }});
+}
+
+// Issue #20: the built-in cheats, and whether the config adds codes of its
+// own. Any of them on stops awards and time attack records.
+void Menu::build_cheats() {
+    items_.clear();
+    Config* c = cfg_;
+    if (!c) return;
+    for (const auto& cheat : cheats::builtin()) {
+        const std::string key = cheat.key;
+        items_.push_back({cheat.name,
+                          [c, key] { return on_off(c->cheats.count(key) != 0); },
+                          [c, key](int s) {
+                              if (!s) return;
+                              if (c->cheats.count(key)) c->cheats.erase(key); else c->cheats.insert(key);
+                          },
+                          cheat.note});
+    }
+    Item own{"CONFIG CODES", [c] {
+                 std::vector<cheats::Write> w;
+                 return c->cheat_codes.empty() ? std::string("NONE")
+                        : cheats::parse_codes(c->cheat_codes, w) ? std::string("ON") : std::string("INVALID");
+             },
+             {}, "Action Replay codes in Config/chaotix.ini, [Cheats] Codes"};
+    own.read_only = true;
+    items_.push_back(std::move(own));
+    Item note{"NO AWARDS OR RECORDS WHILE ON", {}, {}};
+    note.read_only = true;
+    items_.push_back(std::move(note));
+    items_.push_back({"BACK", {}, [this](int) { set_page(Page::Options); }});
 }
 
 void Menu::move(int delta) {
@@ -726,6 +763,7 @@ void Menu::draw_options(ui::Ui& g) {
             ui::theme::background.alpha(240), ui::theme::accent, g.px(4), g.px(3));
 
     const char* heading = page_ == Page::TimeAttack ? "TIME ATTACK"
+                        : page_ == Page::Cheats ? "CHEATS"
                         : page_ == Page::Controls ? "CONTROLS"
                         : page_ == Page::Keys
                               ? (keys_player_ == 0 ? (keys_pad_ ? "1P GAMEPAD" : "1P KEYBOARD")

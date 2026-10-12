@@ -614,3 +614,22 @@ TEST(menu, tapping_the_back_arrow_steps_backwards) {
     CHECK(stepped_back);
     CHECK(stepped_forward);
 }
+
+TEST(menu, cheats_are_switched_on_from_options) {
+    // Issue #20: OPTIONS > CHEATS lists the built-in cheats as on/off rows.
+    Config cfg;
+    cfg.set_defaults();
+    Menu m;
+    m.bind(cfg);
+    m.open_front();
+    CHECK(select_row(m, "OPTIONS"));
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK(select_row(m, "CHEATS"));
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK_STR(m.page_name(), "cheats");
+    CHECK(select_row(m, "SPEED SHOES"));
+    CHECK(m.on_key(SDLK_RIGHT));
+    CHECK(cfg.cheats.count("speed") == 1);
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK(cfg.cheats.count("speed") == 0);
+}

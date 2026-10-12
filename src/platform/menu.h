@@ -77,7 +77,7 @@ public:
     void draw_backdrop_dim(ui::Ui& g) const;
 
 private:
-    enum class Page { Closed, Front, Main, Options, Controls, Keys, TimeAttack, Achievements };
+    enum class Page { Closed, Front, Main, Options, Controls, Keys, TimeAttack, Achievements, Cheats };
 
     struct Item {
         std::string label;
@@ -106,6 +106,7 @@ private:
     void build_front();
     void build_main();
     void build_options();
+    void build_cheats();
     void build_controls();
     void build_time_attack();
     void build_keys();
