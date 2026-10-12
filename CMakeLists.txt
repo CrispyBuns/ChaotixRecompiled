@@ -141,7 +141,8 @@ if(CHAOTIX_BUILD_FRONTEND)
     foreach(asset fonts/Inter-Regular.ttf:font_regular
                   fonts/Inter-SemiBold.ttf:font_semibold
                   fonts/PressStart2P-Regular.ttf:font_pixel
-                  achievements.ini:achievements_ini)
+                  achievements.ini:achievements_ini
+                  icon/icon_64.rgba:app_icon_rgba)
         string(REPLACE ":" ";" asset ${asset})
         list(GET asset 0 _rel)
         list(GET asset 1 _symbol)
@@ -176,6 +177,12 @@ if(CHAOTIX_BUILD_FRONTEND)
         add_executable(chaotix WIN32 MACOSX_BUNDLE ${_frontend_sources})
         if(CHAOTIX_WINDOWS_MANIFEST)
             target_sources(chaotix PRIVATE ${CHAOTIX_WINDOWS_MANIFEST})
+        endif()
+        if(WIN32)
+            set(_icon_rc ${CMAKE_SOURCE_DIR}/platforms/windows/icon.rc)
+            set_source_files_properties(${_icon_rc} PROPERTIES
+                OBJECT_DEPENDS ${CMAKE_SOURCE_DIR}/platforms/windows/app.ico)
+            target_sources(chaotix PRIVATE ${_icon_rc})
         endif()
         set_target_properties(chaotix PROPERTIES OUTPUT_NAME "ChaotixRecompiled")
     endif()

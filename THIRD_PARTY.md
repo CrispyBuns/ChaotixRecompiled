@@ -28,6 +28,15 @@ Both are compiled into the executable (see `cmake/embed_file.cmake`), because
 those screens have to work before any asset folder has been found — the setup
 screen is what runs when nothing is installed yet.
 
+### App icon
+
+- Files: `assets/icon/icon.png`, `assets/icon/icon_64.rgba`,
+  `platforms/windows/app.ico`, `platforms/android/app/src/main/res/mipmap-*/ic_launcher.png`
+- Pixel art of Knuckles by [Abdouxgo](https://github.com/Abdouxgo), contributed
+  in [issue #22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22);
+  the background was made transparent and the sizes scaled from it. Knuckles
+  is a Sega character; see [LEGAL.md](LEGAL.md).
+
 The OFL permits redistribution, bundled or embedded, as long as the licence
 travels with it and the font is not sold on its own. All three files are the
 unmodified released ones.

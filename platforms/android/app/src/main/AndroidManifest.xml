@@ -5,6 +5,7 @@
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />
     <application
         android:label="Chaotix Recompiled"
+        android:icon="@mipmap/ic_launcher"
         android:hardwareAccelerated="true"
         android:appCategory="game"
         android:isGame="true">

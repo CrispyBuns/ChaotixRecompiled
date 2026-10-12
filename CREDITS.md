@@ -13,6 +13,11 @@ people below. Thank you all: every report here led to a fix or a feature.
   ([#16](https://github.com/YuutaTsubasa/ChaotixRecompiled/pull/16)), and
   install error messages ([#17](https://github.com/YuutaTsubasa/ChaotixRecompiled/pull/17)).
 
+## Art
+
+- **[Abdouxgo](https://github.com/Abdouxgo)**: the app icon
+  ([#22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22)).
+
 ## Reports and ideas
 
 - **[Nickwastakenwastaken](https://github.com/Nickwastakenwastaken)**: ROM
