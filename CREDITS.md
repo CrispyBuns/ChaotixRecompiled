@@ -1,0 +1,57 @@
+# Credits
+
+Knuckles' Chaotix Recompiled is made by YuutaTsubasa, with the help of the
+people below. Thank you all: every report here led to a fix or a feature.
+
+## Code
+
+- **[shinmagus](https://github.com/shinmagus)**: the OPTIONS > SCALING label
+  ([#14](https://github.com/YuutaTsubasa/ChaotixRecompiled/pull/14)),
+  non-ASCII file and folder names on Windows
+  ([#15](https://github.com/YuutaTsubasa/ChaotixRecompiled/pull/15)), closing
+  the front menu handing the game over
+  ([#16](https://github.com/YuutaTsubasa/ChaotixRecompiled/pull/16)), and
+  install error messages ([#17](https://github.com/YuutaTsubasa/ChaotixRecompiled/pull/17)).
+
+## Reports and ideas
+
+- **[Nickwastakenwastaken](https://github.com/Nickwastakenwastaken)**: ROM
+  loading ([#2](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/2)).
+- **[sloppydoppies](https://github.com/sloppydoppies)**: the front end, achievements,
+  mod support and audio, which led to music replacement
+  ([#3](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/3)).
+- **[Pokefan2098](https://github.com/Pokefan2098)**: ROM verification and
+  rendering bugs ([#4](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/4),
+  [#5](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/5)).
+- **[blueeeLove](https://github.com/blueeeLove)**: widescreen special stages
+  ([#6](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/6),
+  [#18](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/18)).
+- **[SegaSaturnFan](https://github.com/SegaSaturnFan)**: widescreen dropping to
+  4:3 ([#7](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/7)).
+- **[datadrivezz](https://github.com/datadrivezz)**: the touch menus and
+  suggestions for the mobile build
+  ([#8](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/8),
+  [#9](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/9)).
+- **[mechasalesman](https://github.com/mechasalesman)**: widescreen in the
+  lobby, and cheats ([#13](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/13),
+  [#20](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/20)).
+- **[Abdouxgo](https://github.com/Abdouxgo)**: 32-bit Android, and icon
+  designs ([#19](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/19),
+  [#22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22)).
+- **[iisonic707ii-spec](https://github.com/iisonic707ii-spec)**: the special
+  stage's black lines and its widescreen in play
+  ([#21](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/21)).
+
+## Thanks also to
+
+- [Sonic Retro](https://info.sonicretro.org/Knuckles%27_Chaotix), whose list
+  of cheat codes the built-in cheats come from.
+- PicoDrive, ares, MAME and Genesis Plus GX, used as references while
+  checking the 32X and Mega Drive behaviour (no code taken; see the notes in
+  `docs/`).
+- Third-party libraries and fonts: see [THIRD_PARTY.md](THIRD_PARTY.md).
+
+*Knuckles' Chaotix* is a trademark of Sega; this project is not affiliated
+with Sega. See [LEGAL.md](LEGAL.md).
+
+Contributed and not listed, or want a different name or link? Open an issue.

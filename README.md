@@ -260,6 +260,11 @@ The screens the program draws itself (first-run setup, achievements) use
 Inter, which is compiled into the executable so they work before anything has
 been installed. See [THIRD_PARTY.md](THIRD_PARTY.md).
 
+## Credits
+
+Code, bug reports and ideas from the community made much of this; the people
+behind them are listed in [CREDITS.md](CREDITS.md).
+
 ## Contributing
 
 [CONTRIBUTING.md](CONTRIBUTING.md) — in short: never post game data, and a
