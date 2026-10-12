@@ -180,7 +180,7 @@ void set_special_projection(Machine& m, int shift) {
 } // namespace
 
 bool special_stage_active(const Machine& m) {
-    if (wram16(m, kGameMode) != kModeSpecialStage || !special_projection_loaded(m)) return false;
+    if (!special_projection_loaded(m)) return false;
     if (special_rect_is_ours(m)) return true;
     for (int i = 0; i < 4; ++i)
         if (special_rect(m, i) != kSpecialRect[i]) return false;
@@ -192,7 +192,7 @@ uint64_t scene_key(const Machine& m) {
            wram16(m, kSceneLevel);
 }
 
-bool wide_zone(const Machine& m) { return wram16(m, kSceneZone) != kWorldEntrance; }
+bool wide_zone(const Machine& m) { return m.wide_everywhere || wram16(m, kSceneZone) != kWorldEntrance; }
 
 bool wide_scene_active(const Machine& m) {
     if (!wide_zone(m)) return false;
@@ -200,7 +200,7 @@ bool wide_scene_active(const Machine& m) {
     // script continues, and stages Metal Sonic outside the native view too.
     // $8A6CB8 sets C21C bit2 when that sequence starts; level initialization
     // clears it. Other levels reuse these camera flags, so keep this scoped.
-    if (wram16(m, kSceneZone) == 6 && wram16(m, kSceneLevel) == 0 && (m.wram[0xC21C] & 0x04))
+    if (!m.wide_everywhere && wram16(m, kSceneZone) == 6 && wram16(m, kSceneLevel) == 0 && (m.wram[0xC21C] & 0x04))
         return false;
     if (m.level_seen_frame == ~0ull) return false;
     if (m.level_seen_frame + 8 >= m.frame_count) return true;  // the level is running

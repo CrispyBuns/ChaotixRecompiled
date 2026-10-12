@@ -961,6 +961,7 @@ int main(int argc, char** argv) {
             SDL_GetRenderOutputSize(app.renderer, &ww, &wh);
             const double fa = aspect_value(app.cfg.viewport.aspect, app.cfg.viewport.custom_aspect, wh > 0 ? double(ww) / double(wh) : 0.0);
             app.m->wide_enabled = app.cfg.widescreen;
+            app.m->wide_everywhere = app.cfg.wide_everywhere;
             app.m->wide_extra = app.cfg.widescreen ? widescreen_extra(fa, patches::kMaxWideExtra) : 0;
             // A frame taller than 4:3 gets extra rows below instead.
             app.m->wide_extra_bottom = app.cfg.widescreen ? widescreen_rows(fa, patches::kMaxWideExtraBottom) : 0;

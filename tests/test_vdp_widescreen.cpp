@@ -110,3 +110,27 @@ TEST(vdp_widescreen, actual_zero_coordinate_still_masks_later_sprites) {
     CHECK_EQ(rgb[80 + 80], red);
     CHECK_EQ(rgb[80 + 392], black);
 }
+
+TEST(vdp_widescreen, a_hidden_frame_sprite_is_not_drawn_but_still_collides) {
+    // Issue #21: the special stage frames its picture with black 2x4-cell
+    // sprites at X 0 and 304; widened, those are hidden. One must not cover
+    // a sprite behind it, and must still set the collision flag the game reads.
+    for (bool hide : {false, true}) {
+        auto v = scene();
+        v.cram[17] = 0x00E0;  // palette 1, colour 1: green
+        const uint32_t frame = sat, behind = sat + 8;
+        word(v, frame, line + 128);
+        word(v, frame + 2, (1 << 10) | (3 << 8) | 1);  // 2x4 cells, next = 1
+        word(v, frame + 4, 1);
+        word(v, frame + 6, 0 + 128);
+        word(v, behind, line + 128);
+        word(v, behind + 2, 0);
+        word(v, behind + 4, 0x2000 | 1);
+        word(v, behind + 6, 4 + 128);
+        if (hide) v.hidden_frame_tile = 1;
+        auto rgb = render(v, 53);
+        CHECK(v.sprite_collision);
+        CHECK_EQ(rgb[53 + 2], hide ? black : red);
+        CHECK_EQ(rgb[53 + 6], hide ? 0xFF00FF00u : red);
+    }
+}

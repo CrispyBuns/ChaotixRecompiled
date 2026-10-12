@@ -119,6 +119,13 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
     set_tests_properties(widescreen_leaves_the_lobby_4_3 PROPERTIES TIMEOUT 600
         PASS_REGULAR_EXPRESSION "margins live from frame 21[0-9][0-9]")
 
+    # ...unless the player asks for it anyway (WidescreenEverywhere, issue #21).
+    add_test(NAME widescreen_lobby_when_asked
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1000 --wide 53 --trace-wide
+                --wide-everywhere --stage 300:7:0:0:2:7:0 --press 600:right:2600)
+    set_tests_properties(widescreen_lobby_when_asked PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "margins live from frame 5[0-9][0-9]")
+
     # The special stage is drawn by its own SH-2 polygon code, not the level
     # engine, and stayed 4:3 (issue #18). Its tube is now projected further
     # right and moved back by the host (see patches.h). The patched code must
@@ -139,6 +146,13 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
                 --min-centre-frames 1900 --stage 300:10:0:0:2:7:0
                 --press 1100:left:120 --press 1700:right:200)
     set_tests_properties(lockstep_special_stage_widescreen special_stage_centre_matches_4_3 PROPERTIES TIMEOUT 900)
+    # Issue #21: played from a level (a giant ring), the special stage runs in
+    # the level's game mode, 0x18. Set it so mid-stage: the margins must stay.
+    add_test(NAME special_stage_is_widescreen_in_the_level_mode
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1200 --wide 53 --trace-wide
+                --stage 300:10:2:0:2:7:0 --poke 450:DFDE:00 --poke 450:DFDF:18)
+    set_tests_properties(special_stage_is_widescreen_in_the_level_mode PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "margins live from frame 4[0-4][0-9].*margins live for 7[0-9][0-9] frames in 1 stretches")
 
     add_test(NAME golden_frames_16_9
         COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3200 --wide 53 ${_script}

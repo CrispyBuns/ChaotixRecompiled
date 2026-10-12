@@ -44,3 +44,9 @@ attract demos stay widescreen.
 - Unit test `widescreen_render.the_lobby_stays_4_3`.
 - `widescreen_lets_go_when_a_level_hands_over` still passes: a finished level
   now hands over to a 4:3 lobby.
+
+## Option: widescreen anyway (issue #21)
+
+`WidescreenEverywhere = true` in `[Video]`, or OPTIONS > WIDE LOBBY, widens
+the lobby and the INTRODUCTION Eggman scene again, with the glitches described
+above. Off by default. Test: `widescreen_lobby_when_asked`.

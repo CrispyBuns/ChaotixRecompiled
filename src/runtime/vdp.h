@@ -24,6 +24,12 @@ public:
     uint16_t vsram[40];
     uint8_t reg[32];
 
+    // Host-only: 2x4-cell sprites with this pattern at screen X 0 or 304 are
+    // not drawn (they still count for the status flags). The widened special
+    // stage hides the black columns its sprites frame the 4:3 picture with
+    // (runtime/patches.h). 0xFFFF: none.
+    uint16_t hidden_frame_tile = 0xFFFF;
+
     // control port state
     bool cmd_pending = false;
     uint16_t cmd_first = 0;

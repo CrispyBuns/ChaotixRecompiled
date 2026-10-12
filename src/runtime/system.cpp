@@ -347,6 +347,7 @@ void Machine::render_output_line(int src_line, int dst_row) {
     const int n = vdp.width() + 2 * extra;
     uint32_t md[Vdp::kMaxWidth];
     uint8_t bg[Vdp::kMaxWidth];
+    vdp.hidden_frame_tile = wide_special ? patches::kSpecialFrameTile : 0xFFFF;
     vdp.render_line(src_line, md, bg, extra);
     uint32_t* row = framebuffer + dst_row * kScreenWidth;
     render_line32x(src_line, row, extra, wide_active);
@@ -363,7 +364,9 @@ void Machine::render_output_line(int src_line, int dst_row) {
         // Scenes without widescreen support: black side bars. In a level,
         // black out margin columns outside the level's camera range.
         patches::MarginCut cut{extra, extra};
-        if (wide_special) cut = {};
+        // The special stage's frame: black above and below its rectangle.
+        if (wide_special) cut = src_line < patches::kSpecialRect[2] || src_line > patches::kSpecialRect[3]
+                                    ? patches::MarginCut{extra, extra} : patches::MarginCut{};
         else if (wide_active) cut = patches::margin_cut(*this, extra);
         for (int x = 0; x < cut.left; ++x) row[x] = 0xFF000000u;
         for (int x = 0; x < cut.right; ++x) row[n - 1 - x] = 0xFF000000u;

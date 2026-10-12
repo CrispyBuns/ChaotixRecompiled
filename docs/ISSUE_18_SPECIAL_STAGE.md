@@ -74,3 +74,29 @@ rectangle are put back, unless the next scene has already replaced them.
   unchanged. 407 fps headless in the widened stage against 472 in 4:3.
 - The stage runs to its end ("TIME OUT / TOO BAD!", frame 12926 of a test run)
   in widescreen, and the margins let go the frame the next scene starts.
+
+## Follow-up: issue #21
+
+Two reports after 0.3.8, both reproduced:
+
+- **Black lines.** The stage frames its 4:3 picture with black Mega Drive
+  sprites (pattern `0x038`): 2x4-cell sprites at X 0 and 304 make 16 px
+  columns down both sides, 4x1-cell ones make 4 px bars above and below.
+  Widened, the columns stood in the middle of the picture, plainly visible in
+  the stages whose tube leaves the starfield showing (stages 1 and 2). They
+  are now not drawn while the stage is widened (`Vdp::hidden_frame_tile`;
+  they still count for the sprite status flags, and do not cover sprites
+  behind them), and the margins are black on the rows above and below the
+  stage's rectangle, where the bars are.
+- **Only from the stage select.** Only the stage select starts the special
+  stage in game mode `0x20` (`$8F734A` is the only `move.w #$20,$FFDFDE` in
+  the ROM). In play, a giant ring's object jumps to the stage handler from the
+  level (`$891052 jmp $885850`) and the mode stays the level's `0x18`, so the
+  check for mode `0x20` kept the stage 4:3. The stage is now recognised by its
+  loaded code and its rectangle alone.
+
+Tests: `special_stage_is_widescreen_in_the_level_mode` (the stage select's
+stage with the mode set to `0x18` mid-stage must stay widened, in one stretch),
+`widescreen_render.the_special_stage_is_found_whatever_the_game_mode`, and
+`vdp_widescreen.a_hidden_frame_sprite_is_not_drawn_but_still_collides`.
+Not done: a special stage reached through a real giant ring in a scripted run.

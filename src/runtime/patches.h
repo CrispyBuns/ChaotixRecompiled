@@ -158,8 +158,12 @@ constexpr int plane_shift_for(int extra) { return extra > 0 ? 96 : 0; }
 // a different plane (menus and transitions use 64x64) are left alone.
 constexpr uint8_t kLevelPlaneSize = 0x01;
 
-// The special stage (game mode 0x20, handler $885850) is not a level-engine
-// scene: the master SH-2 draws its tube as polygons from code the stage copies
+// The special stage (handler $885850) is not a level-engine scene. The game
+// mode does not tell it apart: the stage select starts it as mode 0x20, but
+// in play a giant ring jumps to the handler from the level ($891052) and the
+// mode stays the level's 0x18 (issue #21: it stayed 4:3 that way). It is told
+// apart by its own code and rectangle instead (special_stage_active). The
+// master SH-2 draws its tube as polygons from code the stage copies
 // into SDRAM. The polygon rasterizer ($06004858) takes its bounding box and
 // clips against a rectangle stored as data at SDRAM 0x06003844: int16 left,
 // right, top, bottom, inclusive. The special stage sets it to 16, 303, 4, 219
@@ -186,8 +190,13 @@ constexpr uint8_t kLevelPlaneSize = 0x01;
 // The code patch bumps sdram_code_epoch, so recompiled code that covers those
 // bytes is revalidated and the interpreter runs the patched routine.
 constexpr uint32_t kSpecialRectSdram = 0x3844;
-constexpr uint16_t kModeSpecialStage = 0x20;
 constexpr int16_t kSpecialRect[4] = {16, 303, 4, 219};
+// The stage frames its 4:3 picture with black Mega Drive sprites of this
+// pattern (issue #21): 2x4 cells at X 0 and 304 down the sides, 4x1 cells
+// above and below. Widened, the side columns would cut through the picture,
+// so they are not drawn (Vdp::hidden_frame_tile), and the margins are black
+// on the rows above and below the stage's rectangle, where the bars are.
+constexpr uint16_t kSpecialFrameTile = 0x038;
 // The clear's fill: start word within the line, length register, data.
 constexpr uint16_t kSpecialClearStart = 0x08;
 constexpr uint16_t kSpecialClearLen = 0x90;
@@ -207,8 +216,9 @@ struct CentreAdd { uint32_t sdram; uint8_t reg; };
 constexpr CentreAdd kSpecialCentreAdds[] = {
     {0x414A, 0}, {0x4444, 4}, {0x4558, 0}, {0x45D0, 0}, {0x4C60, 0},
 };
-// The special stage is drawing its tube: mode 0x20 with the stage's own
-// rectangle, or the widened one (its intro and results use other rectangles).
+// The special stage is drawing its tube: its code is loaded and the stage's
+// own rectangle, or the widened one, is set (its intro and results use other
+// rectangles, and the levels the rectangle of other scenes).
 bool special_stage_active(const Machine& m);
 
 // A frame counts as a level scene when the level engine's per-frame plane
@@ -231,6 +241,7 @@ bool wide_scene_active(const Machine& m);
 // 96 - E px of slack (natively 192) can keep up with, so chunks went missing
 // even in the 4:3 centre. There the ring is not shifted, the camera clamp is
 // left alone and the margins are black, exactly as a 4:3 window shows it.
+// Machine::wide_everywhere lifts this, and the INTRODUCTION mask below.
 constexpr uint16_t kWorldEntrance = 7;
 bool wide_zone(const Machine& m);
 

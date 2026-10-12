@@ -176,6 +176,7 @@ int main(int argc, char** argv) {
     // count at the end. The count is what tells a level that stayed wide from
     // one that flickered back to 4:3 part way through.
     bool trace_wide = false;
+    bool wide_everywhere = false;  // also widen the scenes kept 4:3
     uint64_t wide_live_frames = 0;
     int wide_stretches = 0;
     bool wide_was_live = false;
@@ -187,6 +188,8 @@ int main(int argc, char** argv) {
     std::string achievements_file;  // --achievements FILE: report unlocks
     uint64_t min_centre_frames = 0;  // fail if fewer frames could be compared
     std::string wav_path;
+    struct Poke { uint64_t frame; uint32_t addr; uint8_t value; };
+    std::vector<Poke> pokes;
     std::string music_dir;  // --music-dir: music replaced by files (audio/music_mods.h)
     std::string coverage_path;
     int break_cpu = -1;
@@ -279,6 +282,7 @@ int main(int argc, char** argv) {
         else if (a == "--wide") wide = std::atoi(next().c_str());
         else if (a == "--wide-bottom") wide_bottom = std::atoi(next().c_str());
         else if (a == "--trace-wide") trace_wide = true;
+        else if (a == "--wide-everywhere") wide_everywhere = true;
         else if (a == "--wide-at") {
             const std::vector<std::string> parts = split(next(), ':');
             if (parts.size() >= 2) {
@@ -315,6 +319,15 @@ int main(int argc, char** argv) {
         else if (a == "--three-button") six_button = 0;
         else if (a == "--audio") { want_audio = true; }
         else if (a == "--sram") sram_path = next();
+        else if (a == "--poke") {
+            // FRAME:ADDR:BYTE, all but FRAME in hex: a 68K work RAM byte set
+            // before that frame runs (tests reach states a script cannot).
+            auto parts = split(next(), ':');
+            if (parts.size() < 3) { std::fprintf(stderr, "bad --poke\n"); return 2; }
+            pokes.push_back({std::strtoull(parts[0].c_str(), nullptr, 10),
+                             uint32_t(std::strtoul(parts[1].c_str(), nullptr, 16) & 0xFFFF),
+                             uint8_t(std::strtoul(parts[2].c_str(), nullptr, 16))});
+        }
         else if (a == "--replay-input") {
             const std::string path = next();
             FILE* rf = std::fopen(path.c_str(), "r");
@@ -377,6 +390,7 @@ int main(int argc, char** argv) {
     m->wide_enabled = wide > 0 || wide_bottom > 0 || wide_at > 0 || wide_at_bottom > 0;
     m->wide_extra = wide;
     m->wide_extra_bottom = wide_bottom;
+    m->wide_everywhere = wide_everywhere;
     if (six_button >= 0) m->input.six_button[0] = m->input.six_button[1] = six_button != 0;
     if (!sram_path.empty()) {
         // Cartridge saves change what the game does, so a replay of somebody
@@ -403,6 +417,7 @@ int main(int argc, char** argv) {
         ref->wide_enabled = wide > 0 || wide_bottom > 0 || wide_at > 0 || wide_at_bottom > 0;
         ref->wide_extra = wide;
         ref->wide_extra_bottom = wide_bottom;
+        ref->wide_everywhere = wide_everywhere;
         if (!rs.active) std::printf("warning: --lockstep without generated code compares the interpreter with itself\n");
     }
     audio::MusicMods music;
@@ -551,6 +566,11 @@ int main(int argc, char** argv) {
         m->input.pad[1] = btn2;
         if (ref) { ref->input.pad[0] = btn; ref->input.pad[1] = btn2; }
         g_trace_on = g_trace && f >= trace_from && f < trace_to;
+        for (const Poke& p : pokes)
+            if (p.frame == f) {
+                m->wram[p.addr] = p.value;
+                if (ref) ref->wram[p.addr] = p.value;
+            }
         const size_t first_sample = m->audio_out.size();
         m->run_frame();
         if (!music_dir.empty()) music.after_frame(*m, first_sample);

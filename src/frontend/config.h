@@ -24,6 +24,9 @@ struct Config {
     int window_scale = 3;
     bool vsync = true;
     bool widescreen = true;  // true widescreen in levels (margins follow AspectRatio)
+    // Widescreen in the scenes kept 4:3 because they show glitches there: the
+    // lobby and the INTRODUCTION Eggman scene.
+    bool wide_everywhere = false;
     bool achievements = true;  // local achievement tracking (assets/achievements.ini)
     // [Audio]
     bool audio = true;

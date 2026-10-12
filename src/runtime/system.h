@@ -157,6 +157,9 @@ public:
     // changes while a level runs; the ring shift is latched at a level load
     // and must not, or resizing the window leaves that level in 4:3.
     bool wide_enabled = false;
+    // Also widen the scenes kept 4:3 on purpose (the lobby, the INTRODUCTION
+    // Eggman scene), glitches and all: the player asked for it (issue #21).
+    bool wide_everywhere = false;
     int plane_shift = 0;               // W latched by the plane streaming patch
     uint64_t level_seen_frame = ~0ull; // last frame the level engine ran (patches.cpp)
     uint64_t full_redraw_frame = ~0ull; // last frame a scene redrew both planes

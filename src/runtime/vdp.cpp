@@ -353,6 +353,7 @@ void Vdp::render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra) {
         int link = 0, count = 0, on_line = 0, pixels = 0;
         bool nonzero_x_seen = false, masked = false;
         uint8_t filled[kMaxWidth] = {};
+        uint8_t hidden_only[kMaxWidth] = {};  // filled by a hidden sprite alone
         while (count < max_sprites) {
             uint32_t e = sat + uint32_t(link) * 8;
             auto rw = [&](uint32_t o) { return uint16_t((vram[(e + o) & 0xFFFF] << 8) | vram[(e + o + 1) & 0xFFFF]); };
@@ -375,6 +376,7 @@ void Vdp::render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra) {
                 if (on_line > max_per_line_draw) break;
                 if (sxr == 0) { if (nonzero_x_seen) masked = true; }
                 else nonzero_x_seen = true;
+                const bool hidden = (pat & 0x7FF) == hidden_frame_tile && hs == 2 && vsz == 4 && (sx == 0 || sx == 304);
                 int row = line - sy;
                 if (pat & 0x1000) row = vsz * 8 - 1 - row;
                 for (int cx = 0; cx < hs * 8; ++cx) {
@@ -389,8 +391,17 @@ void Vdp::render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra) {
                     uint8_t c = tile_pixel(vram, tile, col & 7, row & 7);
                     if (!c) continue;
                     const int i = x - xs;
-                    if (filled[i]) { if (x >= 0 && x < width) sprite_collision = true; continue; }
+                    if (filled[i]) {
+                        if (x >= 0 && x < width) sprite_collision = true;
+                        // A hidden sprite still collides, but does not cover what is behind it.
+                        if (!hidden_only[i] || hidden) continue;
+                        hidden_only[i] = 0;
+                        s[i].color = uint8_t(((pat >> 9) & 0x30) | c);
+                        s[i].prio = (pat >> 15) & 1;
+                        continue;
+                    }
                     filled[i] = 1;
+                    if (hidden) { hidden_only[i] = 1; continue; }
                     s[i].color = uint8_t(((pat >> 9) & 0x30) | c);
                     s[i].prio = (pat >> 15) & 1;
                 }

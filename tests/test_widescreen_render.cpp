@@ -179,6 +179,28 @@ TEST(widescreen_render, intro_mask_does_not_cover_gameplay_or_other_level_events
     CHECK(m->wide_active);
 }
 
+TEST(widescreen_render, the_special_stage_is_found_whatever_the_game_mode) {
+    // Issue #21: a giant ring starts the special stage from a level, and the
+    // game mode stays the level's (0x18); only the stage select uses 0x20.
+    auto m = std::make_unique<Machine>();
+    for (int i = 0; i < 8; ++i) {
+        m->sdram[patches::kSpecialProjectSdram + 2 * uint32_t(i)] = uint8_t(patches::kSpecialProjectCode[i] >> 8);
+        m->sdram[patches::kSpecialProjectSdram + 2 * uint32_t(i) + 1] = uint8_t(patches::kSpecialProjectCode[i]);
+    }
+    for (int i = 0; i < 4; ++i) {
+        m->sdram[patches::kSpecialRectSdram + 2 * uint32_t(i)] = uint8_t(uint16_t(patches::kSpecialRect[i]) >> 8);
+        m->sdram[patches::kSpecialRectSdram + 2 * uint32_t(i) + 1] = uint8_t(patches::kSpecialRect[i]);
+    }
+    for (uint8_t mode : {uint8_t(0x18), uint8_t(0x20)}) {
+        m->wram[patches::kGameMode] = 0;
+        m->wram[patches::kGameMode + 1] = mode;
+        CHECK(patches::special_stage_active(*m));
+    }
+    // A level's own rectangle is not the special stage, code or not.
+    m->sdram[patches::kSpecialRectSdram + 1] = 0;
+    CHECK(!patches::special_stage_active(*m));
+}
+
 TEST(widescreen_render, the_lobby_stays_4_3) {
     // Issue #13: WORLD ENTRANCE is shown exactly as a 4:3 window shows it.
     auto m = level_machine();
