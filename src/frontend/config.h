@@ -31,7 +31,11 @@ struct Config {
     bool achievements = true;  // local achievement tracking (assets/achievements.ini)
     // [Audio]
     bool audio = true;
-    int volume = 80;  // percent
+    int volume = 80;  // percent: everything
+    // Issue #24: the game's music and its sound effects, each in percent of
+    // Volume (audio/volumes.h).
+    int music_volume = 100;
+    int effects_volume = 100;
     // Music played from files in <user data>/Mods/Music (audio/music_mods.h),
     // relative to Volume: they are mastered louder than the game's own.
     int mod_music_volume = 25;  // percent

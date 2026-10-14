@@ -12,6 +12,9 @@ public:
     // output averaged over that period.
     int16_t run(int clocks);
 
+    // Host-side output level of tones 1-3 and noise (see Ym2612::gain).
+    float gain[4] = {1, 1, 1, 1};
+
 private:
     uint16_t tone_[3] = {0, 0, 0};
     uint8_t vol_[4] = {15, 15, 15, 15};

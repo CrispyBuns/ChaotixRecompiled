@@ -97,6 +97,8 @@ bool Config::load(const std::string& path) {
             if (k == "Enabled") audio = parse_bool(v, audio);
             else if (k == "Volume") volume = std::clamp(std::atoi(v.c_str()), 0, 100);
             else if (k == "ModMusicVolume") mod_music_volume = std::clamp(std::atoi(v.c_str()), 0, 100);
+            else if (k == "MusicVolume") music_volume = std::clamp(std::atoi(v.c_str()), 0, 100);
+            else if (k == "EffectsVolume") effects_volume = std::clamp(std::atoi(v.c_str()), 0, 100);
         } else if (section == "Input") {
             if (k == "TouchControls") touch = v == "On" ? TouchMode::On : v == "Off" ? TouchMode::Off : TouchMode::Auto;
             else if (k == "SixButtonPad") six_button = parse_bool(v, six_button);
@@ -146,7 +148,9 @@ bool Config::save(const std::string& path) const {
     std::fprintf(f, "WindowScale = %d\nVSync = %s\n\n", window_scale, vsync ? "true" : "false");
     std::fprintf(f, "[Audio]\nEnabled = %s\nVolume = %d\n", audio ? "true" : "false", volume);
     std::fprintf(f, "# Music from files in Mods/Music (e.g. 05.wav), in percent of Volume\n");
-    std::fprintf(f, "ModMusicVolume = %d\n\n", mod_music_volume);
+    std::fprintf(f, "ModMusicVolume = %d\n", mod_music_volume);
+    std::fprintf(f, "# The game's music and its sound effects, in percent of Volume\n");
+    std::fprintf(f, "MusicVolume = %d\nEffectsVolume = %d\n\n", music_volume, effects_volume);
     std::fprintf(f, "[Cheats]\n# Built-in: rings, speed (also in OPTIONS > CHEATS). Codes: Action Replay codes,\n");
     std::fprintf(f, "# e.g. FFE009:63 + FFADFC:01. Awards and time attack records are not earned with any on.\n");
     std::string enabled;

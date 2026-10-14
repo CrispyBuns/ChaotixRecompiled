@@ -183,6 +183,8 @@ public:
     // since the host last drained them (patches.h, kSoundRequest).
     std::array<bool, 0x2A> music_replaced{};
     std::vector<uint8_t> music_events;
+    // Host-side level of the 32X PWM output (see Ym2612::gain).
+    float pwm_gain = 1.0f;
     // Host-side shadow of the 32X frame buffers for widescreen margins: while
     // wide_active, sprite (overwrite image) writes outside native columns land
     // here instead of in the line padding, which the game uses as storage.

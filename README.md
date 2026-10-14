@@ -211,9 +211,24 @@ supported: they patch the ROM's instructions, which the recompiled code does
 not read. Achievements and time attack records pause while any cheat is on.
 See [docs/CHEATS.md](docs/CHEATS.md).
 
+## Volume and touch controls
+
+OPTIONS has VOLUME (everything), MUSIC and EFFECTS. The sound driver's sound
+effects take over some of the music's channels while they play, and those
+channels follow EFFECTS for that time; see `src/audio/volumes.h`.
+
+Touch controls can be reskinned: BMP images named after the buttons
+(`dpad.bmp`, `a.bmp` ... `start.bmp`, `button.bmp` for all face buttons,
+`<name>_pressed.bmp` while held) in `Mods/Touch`. The folder holds a
+README.txt that lists them.
+
+The `Mods` folder is in the user data folder, except on Android, where it is
+`Android/data/org.chaotixrecompiled/files/Mods` so that a file manager or a
+computer can reach it.
+
 ## Music replacement
 
-Put WAV files in `Mods/Music` in the user data folder (created on first run),
+Put WAV files in `Mods/Music` (see above for where `Mods` is),
 named after the game's music id in hex: `05.wav` replaces BOTANIC BASE's
 music. The game's sound effects still play. Loops come from the WAV's sampler
 chunk or a `05.loop` text file, and `ModMusicVolume` in `[Audio]` sets their

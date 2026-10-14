@@ -80,9 +80,9 @@ with a pause, checked). Without files nothing changes: no request is altered.
   output holds the tone at the expected level and nothing at 300 Hz or
   1 kHz, where the game's music had energy.
 
-On Android the user data folder is the app's private storage, which other apps
-cannot reach without a computer (`adb push`), so for now this is mainly for
-the desktop builds.
+On Android the folder is `Android/data/org.chaotixrecompiled/files/Mods/Music`
+on shared storage, which a computer or a file manager can reach (since 0.4.1;
+the user data folder itself is private there).
 
 Not done: other formats (OGG, FLAC, MP3 need a decoder library), replacing
 sound effects, and per-act or per-time-of-day music, which the game does not

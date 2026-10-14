@@ -337,6 +337,7 @@ void Ym2612::generate(int samples, std::vector<int16_t>& out) {
             if (c == 5 && dac_en_) acc = dac_;
             acc = std::clamp(acc, -8192, 8191);
             int32_t v = acc >> 5;  // 9-bit DAC
+            if (gain[c] != 1.0f) v = int32_t(float(v) * gain[c]);
             if (ch.left) left += v;
             if (ch.right) right += v;
         }

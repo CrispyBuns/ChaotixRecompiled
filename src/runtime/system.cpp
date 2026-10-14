@@ -300,7 +300,8 @@ void Machine::audio_advance(uint64_t end_mclk) {
     // disagree on the single-source routing (see docs/AUDIO_PWM.md).
     const int route = pwm.ctrl & 0x0f;
     const int right_source = route == 0x05 ? 2 : route == 0x0a ? 1 : (pwm.ctrl >> 2) & 3;
-    const int32_t pl = pwm_level(pwm.ctrl & 3), pr = pwm_level(right_source);
+    int32_t pl = pwm_level(pwm.ctrl & 3), pr = pwm_level(right_source);
+    if (pwm_gain != 1.0f) { pl = int32_t(float(pl) * pwm_gain); pr = int32_t(float(pr) * pwm_gain); }
     for (int i = 0; i < n; ++i) {
         psg_frac += kMclkPerAudioSample;
         int clocks = psg_frac / 15;

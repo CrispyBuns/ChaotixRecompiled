@@ -22,6 +22,11 @@ public:
     // Advances only the timers (used when audio output is disabled).
     void tick_timers(int samples);
 
+    // Host-side output level of each channel (1 = as the chip plays it), so
+    // music and sound effects can be set apart (audio/volumes.h). Not chip
+    // state: the game cannot see it.
+    float gain[6] = {1, 1, 1, 1, 1, 1};
+
 private:
     struct Op {
         uint32_t phase = 0, inc = 0;

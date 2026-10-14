@@ -47,8 +47,12 @@ int16_t Sn76489::run(int clocks) {
             out_[3] = lfsr_ & 1;
         }
         int32_t s = 0;
-        for (int c = 0; c < 3; ++c) s += out_[c] ? kVolume[vol_[c]] : -kVolume[vol_[c]];
-        s += out_[3] ? kVolume[vol_[3]] : 0;
+        for (int c = 0; c < 3; ++c) {
+            const int32_t v = out_[c] ? kVolume[vol_[c]] : -kVolume[vol_[c]];
+            s += gain[c] == 1.0f ? v : int32_t(float(v) * gain[c]);
+        }
+        const int32_t noise = out_[3] ? kVolume[vol_[3]] : 0;
+        s += gain[3] == 1.0f ? noise : int32_t(float(noise) * gain[3]);
         acc += s;
         ++n;
     }

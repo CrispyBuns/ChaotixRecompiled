@@ -387,6 +387,12 @@ void Menu::build_options() {
     items_.push_back({"VOLUME",
                       [c] { return std::to_string(c->volume); },
                       [c](int s) { c->volume = std::clamp(c->volume + s * 5, 0, 100); }});
+    items_.push_back({"MUSIC",
+                      [c] { return std::to_string(c->music_volume); },
+                      [c](int s) { c->music_volume = std::clamp(c->music_volume + s * 5, 0, 100); }});
+    items_.push_back({"EFFECTS",
+                      [c] { return std::to_string(c->effects_volume); },
+                      [c](int s) { c->effects_volume = std::clamp(c->effects_volume + s * 5, 0, 100); }});
     items_.push_back({"TOUCH PAD",
                       [c] { return std::string(kTouchNames[int(c->touch)]); },
                       [c](int s) { if (s) cycle(c->touch, 3, s); }});

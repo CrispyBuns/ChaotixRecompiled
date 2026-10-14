@@ -8,6 +8,7 @@
 #include <SDL3/SDL_main.h>
 
 #include "audio/music_mods.h"
+#include "audio/volumes.h"
 #include "frontend/config.h"
 #include "frontend/time_attack.h"
 #include "frontend/debug_overlay.h"
@@ -30,6 +31,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <array>
+#include <cctype>
 #include <map>
 #include <cmath>
 #include <cstdio>
@@ -62,6 +65,9 @@ struct App {
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
     SDL_Texture* texture = nullptr;
+    // Touch control images from Mods/Touch (issue #25), by button name;
+    // [0] as drawn, [1] while pressed. A missing one is drawn as before.
+    std::map<std::string, std::array<SDL_Texture*, 2>> touch_skin;
     SDL_AudioStream* audio = nullptr;
     std::vector<SDL_Gamepad*> pads;
     TouchControls touch;
@@ -77,6 +83,7 @@ struct App {
     // image (what the user would see) and exit. Used by rendering tests.
     uint64_t autotest_frames = 0;
     std::string autotest_shot;
+    std::string mods_dir;  // --mods-dir: mods from here, autotests included
     struct Press { uint64_t frame, duration; uint16_t buttons; };
     std::vector<Press> script;
     // --hold: the same thing but fed into the host's own input path, so it
@@ -233,7 +240,7 @@ std::vector<std::string> rom_search_dirs(const App& app) {
 // not confused with one of them.
 bool option_takes_value(const std::string& a) {
     static const char* with_value[] = {"--aspect", "--autotest", "--autotest-shot", "--window-size",
-                                       "--press", "--user-dir", "--install", "--menu", "--keys", "--shots", "--hold", "--record-input"};
+                                       "--press", "--user-dir", "--install", "--menu", "--keys", "--shots", "--hold", "--record-input", "--mods-dir"};
     for (const char* o : with_value)
         if (a == o) return true;
     return false;
@@ -543,10 +550,81 @@ void handle_key(App& app, const SDL_KeyboardEvent& k) {
     }
 }
 
+// Where mods are read from: the user data folder, except on Android, where
+// that is the app's private storage; there it is the app's folder on shared
+// storage (Android/data/<app>/files), which a file manager or a computer can
+// reach.
+std::string mods_root(const App& app) {
+    if (!app.mods_dir.empty()) {
+        const char last = app.mods_dir.back();
+        return last == '/' || last == '\\' ? app.mods_dir : app.mods_dir + "/";
+    }
+#ifdef SDL_PLATFORM_ANDROID
+    if (const char* ext = SDL_GetAndroidExternalStoragePath()) return std::string(ext) + "/Mods/";
+#endif
+    return app.store.root() + "Mods/";
+}
+
+// Touch control images (issue #25): "<name>.bmp" and "<name>_pressed.bmp" in
+// dir, names dpad, a, b, c, x, y, z, start; "button" stands in for any face
+// button without its own. BMP because SDL reads it everywhere without another
+// library; 32-bit BMP keeps transparency.
+void load_touch_skin(App& app, const std::string& dir) {
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
+    const std::string readme = dir + "/README.txt";
+    if (!std::filesystem::exists(std::filesystem::u8path(readme), ec)) {
+        if (FILE* f = std::fopen(readme.c_str(), "w")) {
+            std::fputs("Touch control images. Put BMP files here (32-bit keeps transparency):\n"
+                       "  dpad.bmp a.bmp b.bmp c.bmp x.bmp y.bmp z.bmp start.bmp\n"
+                       "  button.bmp is used for any face button without its own file.\n"
+                       "  <name>_pressed.bmp is drawn while that button is held.\n"
+                       "Each image is stretched to the button's square; a missing one is drawn as before.\n",
+                       f);
+            std::fclose(f);
+        }
+    }
+    int loaded = 0;
+    for (const char* name : {"dpad", "a", "b", "c", "x", "y", "z", "start", "button"}) {
+        for (int pressed = 0; pressed < 2; ++pressed) {
+            const std::string path = dir + "/" + name + (pressed ? "_pressed" : "") + ".bmp";
+            SDL_Surface* s = SDL_LoadBMP(path.c_str());
+            if (!s) continue;
+            if (SDL_Texture* t = SDL_CreateTextureFromSurface(app.renderer, s)) {
+                SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+                app.touch_skin[name][size_t(pressed)] = t;
+                ++loaded;
+            }
+            SDL_DestroySurface(s);
+        }
+    }
+    if (loaded) LOGI("touch", "%d touch control image(s) from %s", loaded, dir.c_str());
+}
+
+// The image for a button, if the skin has one.
+SDL_Texture* touch_image(const App& app, const TouchButton& b, bool on) {
+    std::string name = b.is_dpad ? "dpad" : b.label;
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) { return char(std::tolower(ch)); });
+    for (const std::string& n : {name, std::string(b.is_dpad || name == "start" ? "" : "button")}) {
+        auto it = app.touch_skin.find(n);
+        if (n.empty() || it == app.touch_skin.end()) continue;
+        if (on && it->second[1]) return it->second[1];
+        if (it->second[0]) return it->second[0];
+    }
+    return nullptr;
+}
+
 void draw_touch_controls(App& app, uint16_t held) {
     SDL_SetRenderDrawBlendMode(app.renderer, SDL_BLENDMODE_BLEND);
     for (const auto& b : app.touch.buttons()) {
         bool on = b.is_dpad ? (held & (PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT)) != 0 : (held & b.mask) != 0;
+        if (SDL_Texture* img = touch_image(app, b, on)) {
+            // Without a pressed image, a held button is drawn brighter.
+            SDL_SetTextureAlphaMod(img, on ? 255 : 170);
+            const SDL_FRect dst{b.cx - b.r, b.cy - b.r, b.r * 2, b.r * 2};
+            SDL_RenderTexture(app.renderer, img, nullptr, &dst);
+            continue;
+        }
         SDL_SetRenderDrawColor(app.renderer, 255, 255, 255, on ? 110 : 55);
         // Approximate circles with a filled square plus cross for the d-pad.
         SDL_FRect r{b.cx - b.r * 0.7f, b.cy - b.r * 0.7f, b.r * 1.4f, b.r * 1.4f};
@@ -631,6 +709,7 @@ int main(int argc, char** argv) {
         else if (a == "--debug") app.cfg.debug_overlay = true;
         else if (a == "--autotest" && i + 1 < argc) app.autotest_frames = std::strtoull(argv[++i], nullptr, 10);
         else if (a == "--autotest-shot" && i + 1 < argc) app.autotest_shot = argv[++i];
+        else if (a == "--mods-dir" && i + 1 < argc) app.mods_dir = argv[++i];
         // Opens a menu page straight away, so it can be captured without a
         // keyboard (the same reason --autotest exists).
         else if (a == "--menu" && i + 1 < argc) menu_page = argv[++i];
@@ -832,13 +911,15 @@ int main(int argc, char** argv) {
     if (!app.autotest_frames) app.store.load_sram(*app.m);  // autotests are hermetic
     RecompStatus rs = install_recompiled_code(*app.m, app.cfg.use_recompiled && !force_interp);
     LOGI("app", "execution: %s", rs.description.c_str());
-    if (!app.autotest_frames) {  // autotests are hermetic
-        // Created so it is easy to find; empty, it changes nothing.
-        const std::string music_dir = app.store.root() + "Mods/Music";
+    if (!app.autotest_frames || !app.mods_dir.empty()) {  // autotests are hermetic unless asked
+        // Created so they are easy to find; empty, they change nothing.
+        const std::string mods = mods_root(app);
+        const std::string music_dir = mods + "Music";
         std::error_code ec;
         std::filesystem::create_directories(std::filesystem::u8path(music_dir), ec);
         if (const int n = app.music.scan(music_dir)) LOGI("music", "%d piece(s) of music replaced from %s", n, music_dir.c_str());
         app.music.attach(*app.m);
+        load_touch_skin(app, mods + "Touch");
     }
 
     if (app.cfg.achievements) {
@@ -1025,9 +1106,12 @@ int main(int argc, char** argv) {
             app.recorded.push_back(uint32_t(uint16_t(buttons | scripted)) | uint32_t(raw2) << 16);
             app.m->input.pad[1] = raw2;
             apply_cheats(app);
+            audio::set_music_and_effect_levels(*app.m, float(app.cfg.music_volume) / 100.0f,
+                                               float(app.cfg.effects_volume) / 100.0f);
             const size_t first_sample = app.m->audio_out.size();
             app.m->run_frame();
-            app.music.set_volume(app.cfg.mod_music_volume);
+            // Replacement music is music too.
+            app.music.set_volume(app.cfg.mod_music_volume * app.cfg.music_volume / 100);
             app.music.after_frame(*app.m, first_sample);
             follow_time_attack(app);
             if (app.achievements_on && !app.cheating) {
@@ -1047,6 +1131,8 @@ int main(int argc, char** argv) {
         // Audio: hand over what the machine produced; keep ~50 ms queued with a
         // gentle rate adjustment instead of dropping or stretching audio.
         if (app.audio) {
+            // VOLUME takes effect at once, not at the next start.
+            SDL_SetAudioStreamGain(app.audio, float(app.cfg.volume) / 100.0f);
             if (!app.m->audio_out.empty()) {
                 if (app.fast_forward) app.m->audio_out.clear();
                 else {

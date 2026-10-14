@@ -45,6 +45,7 @@ add_library(chaotix_runtime STATIC
     src/audio/ym2612.cpp
     src/audio/sn76489.cpp
     src/audio/music_mods.cpp
+    src/audio/volumes.cpp
     src/renderer/image_io.cpp
     src/renderer/viewport.cpp
     src/frontend/setup.cpp
@@ -185,6 +186,11 @@ if(CHAOTIX_BUILD_FRONTEND)
             target_sources(chaotix PRIVATE ${_icon_rc})
         endif()
         set_target_properties(chaotix PROPERTIES OUTPUT_NAME "ChaotixRecompiled")
+        if(UNIX AND NOT APPLE)
+            # The Linux download carries the SDL libraries next to the program
+            # (issue #23); the build tree's own paths are added as well.
+            set_target_properties(chaotix PROPERTIES BUILD_RPATH "\$ORIGIN" INSTALL_RPATH "\$ORIGIN")
+        endif()
     endif()
     target_link_libraries(chaotix PRIVATE chaotix_game SDL3::SDL3 SDL3_ttf::SDL3_ttf)
     chaotix_set_warnings(chaotix)

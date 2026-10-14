@@ -23,8 +23,9 @@ people below. Thank you all: every report here led to a fix or a feature.
 - **[Nickwastakenwastaken](https://github.com/Nickwastakenwastaken)**: ROM
   loading ([#2](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/2)).
 - **[sloppydoppies](https://github.com/sloppydoppies)**: the front end, achievements,
-  mod support and audio, which led to music replacement
-  ([#3](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/3)).
+  mod support and audio, which led to music replacement, and separate volumes
+  ([#3](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/3),
+  [#24](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/24)).
 - **[Pokefan2098](https://github.com/Pokefan2098)**: ROM verification and
   rendering bugs ([#4](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/4),
   [#5](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/5)).
@@ -43,6 +44,10 @@ people below. Thank you all: every report here led to a fix or a feature.
 - **[Abdouxgo](https://github.com/Abdouxgo)**: 32-bit Android, and icon
   designs ([#19](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/19),
   [#22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22)).
+- **[ZacOnGH](https://github.com/ZacOnGH)**: the Linux build
+  ([#23](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/23)).
+- **[CooliKnucx](https://github.com/CooliKnucx)**: touch control images
+  ([#25](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/25)).
 - **[iisonic707ii-spec](https://github.com/iisonic707ii-spec)**: the special
   stage's black lines and its widescreen in play
   ([#21](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/21)).
