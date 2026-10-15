@@ -475,6 +475,17 @@ void apply_cheats(App& app) {
     cheats::apply(*app.m, writes);
 }
 
+// Settings and the cartridge save, written now. Android ends an app without
+// a quit event when it is swiped away, so waiting for the exit lost every
+// setting there (issue #26): this runs whenever the menu closes and whenever
+// the app goes to the background.
+void save_now(App& app) {
+    if (app.autotest_frames) return;  // autotests are hermetic
+    if (app.m->sram_dirty) app.store.store_sram(*app.m);
+    if (!app.cfg.save(app.store.config_file()))
+        LOGW("app", "cannot save settings to %s", app.store.config_file().c_str());
+}
+
 void follow_time_attack(App& app) {
     if (!app.ta.update(*app.m)) return;
     const int frames = app.ta.time;
@@ -974,7 +985,11 @@ int main(int argc, char** argv) {
     double accumulator = 0;
     uint64_t fps_t0 = last, fps_frames = 0, fps_sims = 0;
 
+    bool menu_was_open = app.menu.open();
     while (app.running) {
+        // The menu is where settings change: keep them the moment it closes.
+        if (menu_was_open && !app.menu.open()) save_now(app);
+        menu_was_open = app.menu.open();
         // Wait before polling input so it is fresh when the frame is run.
         // Rendering an unchanged frame here can block in VSync and leave the
         // next pass catching up by two frames. The original NTSC rate, rather
@@ -1024,8 +1039,9 @@ int main(int argc, char** argv) {
                 if (app.menu.open()) { app.menu.on_touch_up(); break; }
                 app.fingers.erase(e.tfinger.fingerID);
                 break;
-            case SDL_EVENT_WINDOW_FOCUS_LOST: case SDL_EVENT_DID_ENTER_BACKGROUND:
-                if (app.m->sram_dirty) app.store.store_sram(*app.m);
+            case SDL_EVENT_WINDOW_FOCUS_LOST: case SDL_EVENT_WILL_ENTER_BACKGROUND:
+            case SDL_EVENT_DID_ENTER_BACKGROUND: case SDL_EVENT_TERMINATING:
+                save_now(app);
                 break;
             default: break;
             }

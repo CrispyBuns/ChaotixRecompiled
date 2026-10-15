@@ -103,12 +103,27 @@ bool Machine::fb_in_margin(uint32_t o) {
            (uint32_t(rel) & (patches::kFbLineStride - 1)) >= uint32_t(kNativeWidth);
 }
 
+// A byte of one of the frame buffer's picture lines (line table entry y at
+// 0x200 + 0x200 * y, 224 of them), as opposed to the header before them or
+// the space after them.
+bool Machine::fb_in_picture(uint32_t o) {
+    return o >= patches::kFbLineBase && o < patches::kFbLineBase + patches::kFbLineStride * uint32_t(kActiveLines);
+}
+
 void Machine::fb_write_special(uint8_t* fb, uint32_t off, uint32_t v, int size, bool overwrite) {
     uint8_t* shadow = fb_margin[mars.fb_display ^ 1];
     for (int i = 0; i < size; ++i) {
         const uint8_t b = uint8_t(v >> (8 * (size - 1 - i)));
         if (overwrite && !b) continue;  // overwrite image: zero bytes are transparent
-        const uint32_t o = (off + uint32_t(i) - (overwrite ? 0u : uint32_t(special_shift))) & 0x1FFFF;
+        const uint32_t raw = (off + uint32_t(i)) & 0x1FFFF;
+        if (!fb_in_picture(raw)) {
+            // Not a picture line: the line table, and the words the 68K and
+            // the SH-2 pass each other there (the stage's result at $1FE,
+            // issue #27). Written as the hardware would.
+            fb[raw] = b;
+            continue;
+        }
+        const uint32_t o = (raw - (overwrite ? 0u : uint32_t(special_shift))) & 0x1FFFF;
         (fb_in_margin(o) ? shadow : fb)[o] = b;
     }
 }
@@ -200,8 +215,10 @@ void Machine::vdp32x_write(uint32_t off, uint32_t v, int size) {
             // A polygon span: moved back by the projection's shift (even),
             // with the margins going to the shadow (see patches.h).
             for (uint32_t i = 0; i <= mars.fill_len; ++i) {
-                const uint32_t o = ((addr & 0xFFFF) * 2 - uint32_t(special_shift)) & 0x1FFFF;
-                uint8_t* dst = fb_in_margin(o) ? shadow : fb;
+                const uint32_t raw = ((addr & 0xFFFF) * 2) & 0x1FFFF;
+                const bool picture = fb_in_picture(raw);
+                const uint32_t o = picture ? ((raw - uint32_t(special_shift)) & 0x1FFFF) : raw;
+                uint8_t* dst = picture && fb_in_margin(o) ? shadow : fb;
                 dst[o] = uint8_t(mars.fill_data >> 8);
                 dst[o + 1] = uint8_t(mars.fill_data);
                 addr = (addr & 0xFF00) | ((addr + 1) & 0xFF);

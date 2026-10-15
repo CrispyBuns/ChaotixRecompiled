@@ -100,3 +100,20 @@ stage with the mode set to `0x18` mid-stage must stay widened, in one stretch),
 `widescreen_render.the_special_stage_is_found_whatever_the_game_mode`, and
 `vdp_widescreen.a_hidden_frame_sprite_is_not_drawn_but_still_collides`.
 Not done: a special stage reached through a real giant ring in a scripted run.
+
+## Follow-up: issue #27 (progress lost in widescreen)
+
+A cleared special stage did not count: the first stage, for the yellow Chaos
+Ring, came back every time. The SH-2 stores the stage's result, 1 when
+cleared, at frame buffer `$1FE` (`$060074BA`); after the stage the 68K reads
+it there (`$927A0E`) and only then moves `$FFE01A` on to the next stage. That
+word is before the first picture line, with the line table. The widened stage
+sent every byte outside the native columns to the host-side shadow, and moved
+non-sprite writes by the projection's shift, so the result never reached the
+frame buffer and the 68K read 0. Since 0.4.0 that is every special stage in
+play, because those are now widened too (issue #21).
+
+Now only the picture lines (line table entry y at `0x200 + 0x200 * y`) are
+widened; bytes before and after them are written exactly as the hardware does.
+Test: `widescreen_render.the_special_stage_result_reaches_the_68k` (fails
+with the old routing). 4:3 was never affected.

@@ -265,3 +265,24 @@ TEST(widescreen_render, intro_eggman_exit_is_masked_and_training_reopens_with_lo
     CHECK_EQ(checked, 5);
 }
 #endif
+
+TEST(widescreen_render, the_special_stage_result_reaches_the_68k) {
+    // Issue #27: when a special stage is cleared, the SH-2 stores 1 at frame
+    // buffer $1FE ($060074BA), and the 68K reads it there ($927A0E) to move on
+    // to the next stage. Widened, everything outside the native columns went
+    // to the host-side shadow, that store included: the 68K read 0 and the
+    // first special stage came back every time. Bytes before the first picture
+    // line are written as the hardware would; picture pixels are still moved.
+    auto m = std::make_unique<Machine>();
+    m->wide_active = m->wide_special = true;
+    m->special_shift = 56;
+    const int back = m->mars.fb_display ^ 1;
+    m->sh2_write(0, 0x240001FE, 1, 2);
+    CHECK_EQ(m->mars.fb[back][0x1FE], 0);
+    CHECK_EQ(m->mars.fb[back][0x1FF], 1);
+    CHECK_EQ(m->fb_margin[back][0x1FF], 0);
+    // A polygon pixel at x' = 56 + 3 of line 0 is drawn at x = 3.
+    m->sh2_write(0, 0x24000200 + 56 + 3, 0x7F, 1);
+    CHECK_EQ(m->mars.fb[back][0x200 + 3], 0x7F);
+    CHECK_EQ(m->mars.fb[back][0x200 + 56 + 3], 0);
+}

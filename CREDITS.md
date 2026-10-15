@@ -48,6 +48,10 @@ people below. Thank you all: every report here led to a fix or a feature.
   ([#23](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/23)).
 - **[CooliKnucx](https://github.com/CooliKnucx)**: touch control images
   ([#25](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/25)).
+- **[rsomethin](https://github.com/rsomethin)**: settings lost on mobile
+  ([#26](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/26)).
+- **[HickySnow](https://github.com/HickySnow)**: special stage progress in
+  widescreen ([#27](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/27)).
 - **[iisonic707ii-spec](https://github.com/iisonic707ii-spec)**: the special
   stage's black lines and its widescreen in play
   ([#21](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/21)).

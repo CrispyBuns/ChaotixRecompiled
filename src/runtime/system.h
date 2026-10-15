@@ -293,6 +293,7 @@ private:
     void fb_write_wide(uint8_t* fb, uint32_t off, uint32_t v, int size);
     void fb_write_special(uint8_t* fb, uint32_t off, uint32_t v, int size, bool overwrite);
     static bool fb_in_margin(uint32_t off);
+    static bool fb_in_picture(uint32_t off);
     void fb_margin_clear_line(uint32_t line_off, uint16_t fill);
     uint32_t fb_read(uint32_t off, int size);
     uint32_t pad_read(int port);
