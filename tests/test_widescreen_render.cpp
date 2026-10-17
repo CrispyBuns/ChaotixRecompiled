@@ -286,3 +286,31 @@ TEST(widescreen_render, the_special_stage_result_reaches_the_68k) {
     CHECK_EQ(m->mars.fb[back][0x200 + 3], 0x7F);
     CHECK_EQ(m->mars.fb[back][0x200 + 56 + 3], 0);
 }
+
+TEST(widescreen_render, the_hud_keeps_to_the_left_edge_when_asked) {
+    // Issue #28: the SH-2's HUD base X (MOV #32,R1 in the boot code) moves
+    // left by the part of the margin that shows the level.
+    auto m = level_machine();
+    auto put = [&](uint32_t at, uint16_t w) { m->sdram[at] = uint8_t(w >> 8); m->sdram[at + 1] = uint8_t(w); };
+    auto get = [&](uint32_t at) { return uint16_t(m->sdram[at] << 8 | m->sdram[at + 1]); };
+    for (const auto& h : patches::kHudBaseX) { put(h.sdram, 0xE120); put(h.sdram + 2, h.next); }
+    stand_in_for_the_engine_in(*m, 0, 1);
+    // Camera well inside the level: the whole margin shows it.
+    m->wram[patches::kPlaneAStruct] = 0x04;
+    m->wram[patches::kPlaneAStruct + 1] = 0x00;
+    patches::begin_frame(*m);
+    CHECK_EQ(get(patches::kHudBaseX[0].sdram), uint16_t(0xE120));  // off by default
+    m->wide_hud_edges = true;
+    patches::begin_frame(*m);
+    for (const auto& h : patches::kHudBaseX) CHECK_EQ(get(h.sdram), uint16_t(0xE100 | uint8_t(int8_t(32 - 53))));
+    // At the level's start the left margin is blacked out: the HUD stays.
+    m->wram[patches::kPlaneAStruct] = 0;
+    m->wram[patches::kPlaneAStruct + 1] = 0;
+    patches::begin_frame(*m);
+    CHECK_EQ(get(patches::kHudBaseX[0].sdram), uint16_t(0xE120));
+    // Code that is not the HUD's is left alone.
+    put(patches::kHudBaseX[1].sdram + 2, 0x0009);
+    m->wram[patches::kPlaneAStruct] = 0x04;
+    patches::begin_frame(*m);
+    CHECK_EQ(get(patches::kHudBaseX[1].sdram), uint16_t(0xE120));
+}

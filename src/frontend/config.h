@@ -28,6 +28,8 @@ struct Config {
     // Widescreen in the scenes kept 4:3 because they show glitches there: the
     // lobby and the INTRODUCTION Eggman scene.
     bool wide_everywhere = false;
+    // In widened levels, the HUD at the picture's left edge (issue #28).
+    bool wide_hud = true;
     bool achievements = true;  // local achievement tracking (assets/achievements.ini)
     // [Audio]
     bool audio = true;

@@ -178,6 +178,7 @@ int main(int argc, char** argv) {
     // one that flickered back to 4:3 part way through.
     bool trace_wide = false;
     bool wide_everywhere = false;  // also widen the scenes kept 4:3
+    bool hud_edges = false;        // the HUD at the widened picture's edge
     std::vector<cheats::Write> cheat_writes;  // --cheat, set before every frame
     uint64_t wide_live_frames = 0;
     int wide_stretches = 0;
@@ -285,6 +286,7 @@ int main(int argc, char** argv) {
         else if (a == "--wide-bottom") wide_bottom = std::atoi(next().c_str());
         else if (a == "--trace-wide") trace_wide = true;
         else if (a == "--wide-everywhere") wide_everywhere = true;
+        else if (a == "--hud-edges") hud_edges = true;
         else if (a == "--cheat") {
             // A built-in cheat by its key, or Action Replay codes.
             const std::string c = next();
@@ -401,6 +403,7 @@ int main(int argc, char** argv) {
     m->wide_extra = wide;
     m->wide_extra_bottom = wide_bottom;
     m->wide_everywhere = wide_everywhere;
+    m->wide_hud_edges = hud_edges;
     if (six_button >= 0) m->input.six_button[0] = m->input.six_button[1] = six_button != 0;
     if (!sram_path.empty()) {
         // Cartridge saves change what the game does, so a replay of somebody
@@ -428,6 +431,7 @@ int main(int argc, char** argv) {
         ref->wide_extra = wide;
         ref->wide_extra_bottom = wide_bottom;
         ref->wide_everywhere = wide_everywhere;
+        ref->wide_hud_edges = hud_edges;
         if (!rs.active) std::printf("warning: --lockstep without generated code compares the interpreter with itself\n");
     }
     audio::MusicMods music;

@@ -222,9 +222,13 @@ Touch controls can be reskinned: BMP images named after the buttons
 `<name>_pressed.bmp` while held) in `Mods/Touch`. The folder holds a
 README.txt that lists them.
 
-The `Mods` folder is in the user data folder, except on Android, where it is
-`Android/data/org.chaotixrecompiled/files/Mods` so that a file manager or a
-computer can reach it.
+The `Mods` folder is in the user data folder. On Android it is
+`ChaotixRecompiled/Mods` in the phone's storage once you allow it (OPTIONS >
+MODS FOLDER opens Android's "All files access" page), and
+`Android/data/org.chaotixrecompiled/files/Mods` until then.
+
+In widescreen levels the HUD keeps to the left edge of the picture; OPTIONS >
+WIDE HUD puts it back at its 4:3 place.
 
 ## Music replacement
 

@@ -6,6 +6,9 @@
 // no graphics API is referenced directly.
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
+#ifdef SDL_PLATFORM_ANDROID
+#include <jni.h>
+#endif
 
 #include "audio/music_mods.h"
 #include "audio/volumes.h"
@@ -84,6 +87,7 @@ struct App {
     uint64_t autotest_frames = 0;
     std::string autotest_shot;
     std::string mods_dir;  // --mods-dir: mods from here, autotests included
+    std::string mods_loaded_from;  // the Mods folder load_mods last read
     struct Press { uint64_t frame, duration; uint16_t buttons; };
     std::vector<Press> script;
     // --hold: the same thing but fed into the host's own input path, so it
@@ -561,16 +565,67 @@ void handle_key(App& app, const SDL_KeyboardEvent& k) {
     }
 }
 
-// Where mods are read from: the user data folder, except on Android, where
-// that is the app's private storage; there it is the app's folder on shared
-// storage (Android/data/<app>/files), which a file manager or a computer can
-// reach.
+#ifdef SDL_PLATFORM_ANDROID
+// ChaotixActivity's shared storage methods (issue #29).
+jclass activity_class(JNIEnv* env) {
+    jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (!activity) return nullptr;
+    jclass c = env->GetObjectClass(activity);
+    env->DeleteLocalRef(activity);
+    return c;
+}
+
+bool android_shared_storage() {
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+    jclass c = env ? activity_class(env) : nullptr;
+    if (!c) return false;
+    jmethodID m = env->GetStaticMethodID(c, "hasSharedStorage", "()Z");
+    const bool ok = m && env->CallStaticBooleanMethod(c, m);
+    env->DeleteLocalRef(c);
+    return ok;
+}
+
+std::string android_shared_mods_dir() {
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+    jclass c = env ? activity_class(env) : nullptr;
+    if (!c) return "";
+    std::string dir;
+    if (jmethodID m = env->GetStaticMethodID(c, "sharedModsDir", "()Ljava/lang/String;")) {
+        if (jstring s = static_cast<jstring>(env->CallStaticObjectMethod(c, m))) {
+            const char* utf = env->GetStringUTFChars(s, nullptr);
+            dir = utf;
+            env->ReleaseStringUTFChars(s, utf);
+            env->DeleteLocalRef(s);
+        }
+    }
+    env->DeleteLocalRef(c);
+    return dir;
+}
+
+void android_request_shared_storage() {
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+    jclass c = env ? activity_class(env) : nullptr;
+    if (!c) return;
+    if (jmethodID m = env->GetStaticMethodID(c, "requestSharedStorage", "()V")) env->CallStaticVoidMethod(c, m);
+    env->DeleteLocalRef(c);
+}
+#endif
+
+// Where mods are read from: the user data folder. On Android that is the
+// app's private storage, so there it is ChaotixRecompiled/Mods on shared
+// storage once the app may use it (issue #29; OPTIONS > MODS FOLDER asks),
+// and until then the app's own folder there (Android/data/<app>/files), which
+// only a computer can reach on Android 11 and later.
 std::string mods_root(const App& app) {
     if (!app.mods_dir.empty()) {
         const char last = app.mods_dir.back();
         return last == '/' || last == '\\' ? app.mods_dir : app.mods_dir + "/";
     }
 #ifdef SDL_PLATFORM_ANDROID
+    if (android_shared_storage()) {
+        const std::string shared = android_shared_mods_dir();
+        if (!shared.empty()) return shared;
+    }
     if (const char* ext = SDL_GetAndroidExternalStoragePath()) return std::string(ext) + "/Mods/";
 #endif
     return app.store.root() + "Mods/";
@@ -610,6 +665,26 @@ void load_touch_skin(App& app, const std::string& dir) {
         }
     }
     if (loaded) LOGI("touch", "%d touch control image(s) from %s", loaded, dir.c_str());
+}
+
+// Music and touch images from the Mods folder; again when that folder has
+// changed (Android: shared storage access granted while the app was away).
+void load_mods(App& app) {
+    const std::string mods = mods_root(app);
+    if (mods == app.mods_loaded_from) return;
+    app.mods_loaded_from = mods;
+    for (auto& entry : app.touch_skin)
+        for (SDL_Texture* tex : entry.second) if (tex) SDL_DestroyTexture(tex);
+    app.touch_skin.clear();
+    app.music = audio::MusicMods{};
+    // Created so they are easy to find; empty, they change nothing.
+    const std::string music_dir = mods + "Music";
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::u8path(music_dir), ec);
+    if (const int n = app.music.scan(music_dir)) LOGI("music", "%d piece(s) of music replaced from %s", n, music_dir.c_str());
+    app.music.attach(*app.m);
+    load_touch_skin(app, mods + "Touch");
+    LOGI("app", "mods folder: %s", mods.c_str());
 }
 
 // The image for a button, if the skin has one.
@@ -859,6 +934,10 @@ int main(int argc, char** argv) {
             app.handed_over = true;
         };
         hooks.pad_count = [&app] { return int(app.pads.size()); };
+#ifdef SDL_PLATFORM_ANDROID
+        hooks.mods_folder = [] { return android_shared_storage() ? android_shared_mods_dir() : std::string(); };
+        hooks.share_mods_folder = [] { android_request_shared_storage(); };
+#endif
         hooks.pad_name = [&app](int i) -> std::string {
             if (i < 0 || size_t(i) >= app.pads.size()) return "";
             const char* n = SDL_GetGamepadName(app.pads[size_t(i)]);
@@ -923,14 +1002,7 @@ int main(int argc, char** argv) {
     RecompStatus rs = install_recompiled_code(*app.m, app.cfg.use_recompiled && !force_interp);
     LOGI("app", "execution: %s", rs.description.c_str());
     if (!app.autotest_frames || !app.mods_dir.empty()) {  // autotests are hermetic unless asked
-        // Created so they are easy to find; empty, they change nothing.
-        const std::string mods = mods_root(app);
-        const std::string music_dir = mods + "Music";
-        std::error_code ec;
-        std::filesystem::create_directories(std::filesystem::u8path(music_dir), ec);
-        if (const int n = app.music.scan(music_dir)) LOGI("music", "%d piece(s) of music replaced from %s", n, music_dir.c_str());
-        app.music.attach(*app.m);
-        load_touch_skin(app, mods + "Touch");
+        load_mods(app);
     }
 
     if (app.cfg.achievements) {
@@ -1043,6 +1115,10 @@ int main(int argc, char** argv) {
             case SDL_EVENT_DID_ENTER_BACKGROUND: case SDL_EVENT_TERMINATING:
                 save_now(app);
                 break;
+            case SDL_EVENT_DID_ENTER_FOREGROUND:
+                // Back from the system's storage access page, perhaps.
+                if (!app.autotest_frames || !app.mods_dir.empty()) load_mods(app);
+                break;
             default: break;
             }
         }
@@ -1083,6 +1159,7 @@ int main(int argc, char** argv) {
             const double fa = aspect_value(app.cfg.viewport.aspect, app.cfg.viewport.custom_aspect, wh > 0 ? double(ww) / double(wh) : 0.0);
             app.m->wide_enabled = app.cfg.widescreen;
             app.m->wide_everywhere = app.cfg.wide_everywhere;
+            app.m->wide_hud_edges = app.cfg.wide_hud;
             app.m->wide_extra = app.cfg.widescreen ? widescreen_extra(fa, patches::kMaxWideExtra) : 0;
             // A frame taller than 4:3 gets extra rows below instead.
             app.m->wide_extra_bottom = app.cfg.widescreen ? widescreen_rows(fa, patches::kMaxWideExtraBottom) : 0;

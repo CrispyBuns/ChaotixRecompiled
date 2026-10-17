@@ -52,6 +52,10 @@ people below. Thank you all: every report here led to a fix or a feature.
   ([#26](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/26)).
 - **[HickySnow](https://github.com/HickySnow)**: special stage progress in
   widescreen ([#27](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/27)).
+- **[lemanrush](https://github.com/lemanrush)**: the HUD at the widescreen
+  edge ([#28](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/28)).
+- **[DoodleDiskette](https://github.com/DoodleDiskette)**: a reachable Mods
+  folder on Android ([#29](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/29)).
 - **[iisonic707ii-spec](https://github.com/iisonic707ii-spec)**: the special
   stage's black lines and its widescreen in play
   ([#21](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/21)).

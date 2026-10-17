@@ -216,6 +216,21 @@ struct CentreAdd { uint32_t sdram; uint8_t reg; };
 constexpr CentreAdd kSpecialCentreAdds[] = {
     {0x414A, 0}, {0x4444, 4}, {0x4558, 0}, {0x45D0, 0}, {0x4C60, 0},
 };
+// The level HUD (issue #28). The SH-2 draws SCORE, TIME and RINGS from the
+// 68K's HUD command ($06000C9C), at base positions that are immediates in the
+// boot code: MOV #32,R1 then MOV #16/#32/#48,R2. With Machine::wide_hud_edges
+// the X immediates become 32 - M in a widened level, M being the part of the
+// left margin that shows the level (margin_cut blacks out the rest near a
+// level's start), so the HUD keeps to the left edge of the picture. The level
+// clip already reaches into the margin, and its pixels there go to the
+// shadow like any sprite's. Like the special stage's code patch, this bumps
+// sdram_code_epoch.
+struct HudBase { uint32_t sdram; uint16_t next; };
+constexpr HudBase kHudBaseX[] = {
+    {0x0CA2, 0xE210}, {0x0CAC, 0xE220}, {0x0CB4, 0xE230}, {0x0CC0, 0xE210}, {0x0CCA, 0xAFF4},
+};
+constexpr int kHudX = 32;
+
 // The special stage is drawing its tube: its code is loaded and the stage's
 // own rectangle, or the widened one, is set (its intro and results use other
 // rectangles, and the levels the rectangle of other scenes).

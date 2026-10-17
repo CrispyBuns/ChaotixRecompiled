@@ -366,6 +366,10 @@ void Menu::build_options() {
     items_.push_back({"WIDE LOBBY",
                       [c] { return on_off(c->wide_everywhere); },
                       [c](int s) { if (s) c->wide_everywhere = !c->wide_everywhere; }});
+    items_.push_back({"WIDE HUD",
+                      [c] { return on_off(c->wide_hud); },
+                      [c](int s) { if (s) c->wide_hud = !c->wide_hud; },
+                      "score, time and rings at the screen edge"});
     items_.push_back({"ASPECT RATIO",
                       [c] { return std::string(kAspectNames[int(c->viewport.aspect)]); },
                       [c](int s) { if (s) cycle(c->viewport.aspect, 5, s); }});
@@ -402,6 +406,15 @@ void Menu::build_options() {
     items_.push_back({"CHEATS", [c] { return c->cheats.empty() && c->cheat_codes.empty() ? std::string("OFF") : std::string("ON"); },
                       [this](int step) { if (step == 0) set_page(Page::Cheats); }});
     items_.back().pressed = true;
+    if (hooks_.share_mods_folder) {
+        Item mods{"MODS FOLDER",
+                  [this] { return hooks_.mods_folder && !hooks_.mods_folder().empty() ? std::string("SHARED")
+                                                                                     : std::string("ALLOW ACCESS"); },
+                  [this](int step) { if (step == 0 && hooks_.share_mods_folder) hooks_.share_mods_folder(); },
+                  "ChaotixRecompiled/Mods in your phone's storage"};
+        mods.pressed = true;
+        items_.push_back(std::move(mods));
+    }
     items_.push_back({"AWARDS",
                       [c] { return on_off(c->achievements); },
                       [c](int s) { if (s) c->achievements = !c->achievements; }});

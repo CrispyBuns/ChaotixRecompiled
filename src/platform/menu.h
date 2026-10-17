@@ -32,6 +32,10 @@ public:
         // How many gamepads are plugged in, so the controls page can offer
         // them by number.
         std::function<int()> pad_count;
+        // Android (issue #29): the Mods folder on shared storage, empty while
+        // the app may not use it, and the request for that access.
+        std::function<std::string()> mods_folder;
+        std::function<void()> share_mods_folder;
         // The controller's own name, so the page can say which one it means.
         std::function<std::string(int index)> pad_name;
         // Locks every achievement again and forgets the saved progress.

@@ -128,6 +128,13 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
     set_tests_properties(widescreen_lobby_when_asked PROPERTIES TIMEOUT 600
         PASS_REGULAR_EXPRESSION "margins live from frame 5[0-9][0-9]")
 
+    # The HUD at the picture's edge (issue #28) patches the SH-2 boot code;
+    # the interpreter and the recompiled code must still agree.
+    add_test(NAME lockstep_widescreen_hud_at_the_edge
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1800 --wide 53 --hud-edges --lockstep
+                --stage 300:0:1:0:2:7:0 --press 1300:right:400)
+    set_tests_properties(lockstep_widescreen_hud_at_the_edge PROPERTIES TIMEOUT 900)
+
     # The special stage is drawn by its own SH-2 polygon code, not the level
     # engine, and stayed 4:3 (issue #18). Its tube is now projected further
     # right and moved back by the host (see patches.h). The patched code must

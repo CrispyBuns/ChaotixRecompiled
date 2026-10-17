@@ -179,6 +179,18 @@ void set_special_projection(Machine& m, int shift) {
 
 } // namespace
 
+// Puts the HUD's base X at kHudX - shift (see kHudBaseX).
+void set_hud_shift(Machine& m, int shift) {
+    const uint16_t mov = uint16_t(0xE100 | uint8_t(int8_t(kHudX - shift)));
+    for (const HudBase& h : kHudBaseX) {
+        const uint16_t w = sdram16(m, h.sdram);
+        if ((w & 0xFF00) != 0xE100 || sdram16(m, h.sdram + 2) != h.next || w == mov) continue;
+        m.sdram[h.sdram] = uint8_t(mov >> 8);
+        m.sdram[h.sdram + 1] = uint8_t(mov);
+        ++m.sdram_code_epoch;
+    }
+}
+
 bool special_stage_active(const Machine& m) {
     if (!special_projection_loaded(m)) return false;
     if (special_rect_is_ours(m)) return true;
@@ -285,6 +297,8 @@ void begin_frame(Machine& m) {
         write_clip(m, int16_t((r[0] << 8) | r[1]), int16_t((r[2] << 8) | r[3]), bottom);
         m.clip_overridden = false;
     }
+    // The HUD keeps to the left edge of what the margin shows of the level.
+    set_hud_shift(m, level && m.wide_hud_edges && e ? e - margin_cut(m, e).left : 0);
 }
 
 void install(Machine& m) {
