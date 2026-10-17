@@ -3,6 +3,8 @@
 // it key presses and inspecting the Config it was bound to.
 #include "platform/menu.h"
 
+#include <cctype>
+
 #include "frontend/config.h"
 #include "game/achievements.h"
 #include "test_framework.h"
@@ -31,6 +33,16 @@ void open_options(Menu& m) {
     CHECK(select_row(m, "OPTIONS"));
     CHECK(m.on_key(SDLK_RETURN));
     CHECK_STR(m.page_name(), "options");
+}
+
+// OPTIONS lists categories; this opens one of them.
+void open_category(Menu& m, const std::string& label) {
+    open_options(m);
+    CHECK(select_row(m, label));
+    CHECK(m.on_key(SDLK_RETURN));
+    std::string page = label;
+    for (char& ch : page) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+    CHECK_STR(m.page_name(), page);
 }
 
 } // namespace
@@ -74,7 +86,7 @@ TEST(menu, left_right_changes_a_setting) {
     cfg.set_defaults();
     Menu m;
     m.bind(cfg);
-    open_options(m);
+    open_category(m, "VIDEO");
     CHECK(select_row(m, "WIDESCREEN"));
 
     const bool was = cfg.widescreen;
@@ -90,7 +102,7 @@ TEST(menu, volume_steps_and_clamps) {
     cfg.volume = 0;
     Menu m;
     m.bind(cfg);
-    open_options(m);
+    open_category(m, "SOUND");
     CHECK(select_row(m, "VOLUME"));
 
     CHECK(m.on_key(SDLK_LEFT));
@@ -106,7 +118,7 @@ TEST(menu, aspect_ratio_cycles_both_ways) {
     cfg.set_defaults();
     Menu m;
     m.bind(cfg);
-    open_options(m);
+    open_category(m, "VIDEO");
     CHECK(select_row(m, "ASPECT RATIO"));
 
     const AspectMode start = cfg.viewport.aspect;
@@ -303,7 +315,7 @@ TEST(menu, resetting_awards_asks_twice) {
     Menu::Hooks h;
     h.reset_awards = [&resets] { ++resets; };
     m.set_hooks(h);
-    open_options(m);
+    open_category(m, "EXTRAS");
     CHECK(select_row(m, "RESET AWARDS"));
 
     CHECK(m.on_key(SDLK_RETURN));   // asks for confirmation
@@ -511,14 +523,14 @@ TEST(menu, confirm_changes_a_setting) {
     cfg.set_defaults();
     Menu m;
     m.bind(cfg);
-    open_options(m);
+    open_category(m, "VIDEO");
     CHECK(select_row(m, "WIDESCREEN"));
     const bool was = cfg.widescreen;
     CHECK(m.on_key(SDLK_RETURN));
     CHECK(cfg.widescreen != was);
     CHECK(m.on_pad(SDL_GAMEPAD_BUTTON_SOUTH));
     CHECK(cfg.widescreen == was);
-    CHECK_STR(m.page_name(), "options");
+    CHECK_STR(m.page_name(), "video");
 }
 
 namespace {
@@ -571,7 +583,7 @@ TEST(menu, tapping_an_option_changes_it) {
     cfg.set_defaults();
     Menu m;
     m.bind(cfg);
-    open_options(m);
+    open_category(m, "VIDEO");
     Drawn d;
     CHECK(d.ok);
     if (!d.ok) return;
@@ -593,7 +605,7 @@ TEST(menu, tapping_the_back_arrow_steps_backwards) {
     cfg.set_defaults();
     Menu m;
     m.bind(cfg);
-    open_options(m);
+    open_category(m, "VIDEO");
     Drawn d;
     CHECK(d.ok);
     if (!d.ok) return;
@@ -616,13 +628,15 @@ TEST(menu, tapping_the_back_arrow_steps_backwards) {
 }
 
 TEST(menu, cheats_are_switched_on_from_options) {
-    // Issue #20: OPTIONS > CHEATS lists the built-in cheats as on/off rows.
+    // Issue #20: OPTIONS > EXTRAS > CHEATS lists the built-in cheats as on/off rows.
     Config cfg;
     cfg.set_defaults();
     Menu m;
     m.bind(cfg);
     m.open_front();
     CHECK(select_row(m, "OPTIONS"));
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK(select_row(m, "EXTRAS"));
     CHECK(m.on_key(SDLK_RETURN));
     CHECK(select_row(m, "CHEATS"));
     CHECK(m.on_key(SDLK_RETURN));
@@ -632,4 +646,59 @@ TEST(menu, cheats_are_switched_on_from_options) {
     CHECK(cfg.cheats.count("speed") == 1);
     CHECK(m.on_key(SDLK_RETURN));
     CHECK(cfg.cheats.count("speed") == 0);
+}
+
+TEST(menu, options_is_split_into_pages_that_fit) {
+    // OPTIONS had grown to about twenty rows and ran off a phone's screen; it
+    // is now a list of categories, each a short page that steps back to it.
+    Config cfg;
+    cfg.set_defaults();
+    Menu m;
+    m.bind(cfg);
+    Menu::Hooks h;
+    h.share_mods_folder = [] {};  // the longest EXTRAS, as on Android
+    m.set_hooks(h);
+    open_options(m);
+    CHECK(select_row(m, "VIDEO"));
+    CHECK(!select_row(m, "WIDESCREEN"));
+    for (const char* cat : {"VIDEO", "SOUND", "INPUT", "EXTRAS"}) {
+        CHECK(select_row(m, cat));
+        CHECK(m.on_key(SDLK_RETURN));
+        int rows = 0;
+        const std::string first = m.selected_label();
+        do { ++rows; m.on_key(SDLK_DOWN); } while (m.selected_label() != first && rows < 64);
+        CHECK(rows <= 10);
+        CHECK(m.on_key(SDLK_ESCAPE));
+        CHECK_STR(m.page_name(), "options");
+    }
+    // CHEATS sits under EXTRAS and steps back there, both ways.
+    CHECK(select_row(m, "EXTRAS"));
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK(select_row(m, "CHEATS"));
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK(m.on_key(SDLK_ESCAPE));
+    CHECK_STR(m.page_name(), "extras");
+    CHECK(select_row(m, "CHEATS"));
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK(select_row(m, "BACK"));
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK_STR(m.page_name(), "extras");
+}
+
+TEST(menu, the_cheats_page_is_drawn_as_a_list) {
+    // It used to be drawn as the awards page, so its rows could not be seen
+    // or tapped.
+    Config cfg;
+    cfg.set_defaults();
+    Menu m;
+    m.bind(cfg);
+    m.show_page("cheats");
+    Drawn d;
+    CHECK(d.ok);
+    if (!d.ok) return;
+    d.draw(m);
+    const float y = tap_select(d, m, "SPEED SHOES");
+    CHECK(y >= 0);
+    d.tap(m, 640, y);
+    CHECK(cfg.cheats.count("speed") == 1);
 }

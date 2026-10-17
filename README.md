@@ -116,6 +116,10 @@ START GAME, TIME ATTACK, OPTIONS, CONTROLS, AWARDS, QUIT — over the same pictu
 and dimmed. The art is the game drawing its own title screen, from your ROM,
 so nothing is extracted or shipped.
 
+OPTIONS is split into VIDEO (widescreen, aspect ratio, scaling, screen),
+SOUND (the volumes), INPUT (touch pad, 6-button pad) and EXTRAS (cheats,
+awards, and on Android the Mods folder).
+
 START GAME hands the game control, and it proceeds into its own menus exactly
 as it would have on the console, so nothing the original offers is out of
 reach. Escape (or the pad's menu button) then brings up a pause menu, which
@@ -177,7 +181,7 @@ leaves alone - left stick click (the default), right stick click,
 Guide/Home/PS, the touchpad click, or Share/Capture. The same button backs
 out of the menu again.
 
-OPTIONS has RESET AWARDS, which asks twice before locking everything again.
+OPTIONS > EXTRAS has RESET AWARDS, which asks twice before locking everything again.
 
 On-screen touch controls appear once the screen is touched (`TouchControls =
 Auto`), always (`On`), or never (`Off`). Gamepads work through SDL
@@ -205,7 +209,7 @@ was checked by driving the game to it rather than by reading the conditions.
 
 ## Cheats
 
-OPTIONS > CHEATS has 99 RINGS and SPEED SHOES, and `[Cheats] Codes` in the
+OPTIONS > EXTRAS > CHEATS has 99 RINGS and SPEED SHOES, and `[Cheats] Codes` in the
 config takes Action Replay codes (`FFE009:63`). Game Genie codes are not
 supported: they patch the ROM's instructions, which the recompiled code does
 not read. Achievements and time attack records pause while any cheat is on.
@@ -213,7 +217,7 @@ See [docs/CHEATS.md](docs/CHEATS.md).
 
 ## Volume and touch controls
 
-OPTIONS has VOLUME (everything), MUSIC and EFFECTS. The sound driver's sound
+OPTIONS > SOUND has VOLUME (everything), MUSIC and EFFECTS. The sound driver's sound
 effects take over some of the music's channels while they play, and those
 channels follow EFFECTS for that time; see `src/audio/volumes.h`.
 
@@ -224,11 +228,11 @@ README.txt that lists them.
 
 The `Mods` folder is in the user data folder. On Android it is
 `ChaotixRecompiled/Mods` in the phone's storage once you allow it (OPTIONS >
-MODS FOLDER opens Android's "All files access" page), and
+EXTRAS > MODS FOLDER opens Android's "All files access" page), and
 `Android/data/org.chaotixrecompiled/files/Mods` until then.
 
 In widescreen levels the HUD keeps to the left edge of the picture; OPTIONS >
-WIDE HUD puts it back at its 4:3 place.
+VIDEO > WIDE HUD puts it back at its 4:3 place.
 
 ## Music replacement
 

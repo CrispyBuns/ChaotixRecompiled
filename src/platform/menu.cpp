@@ -40,7 +40,18 @@ bool Menu::is_row_page(Page p) { return p == Page::Main; }
 
 bool Menu::is_list_page(Page p) {
     return p == Page::Front || p == Page::Options || p == Page::Controls || p == Page::Keys ||
-           p == Page::TimeAttack || p == Page::Cheats;
+           p == Page::TimeAttack || p == Page::Cheats || p == Page::Video || p == Page::Sound ||
+           p == Page::Input || p == Page::Extras;
+}
+
+// Where BACK and Escape go from a page below another one.
+Menu::Page Menu::parent_of(Page p) {
+    switch (p) {
+    case Page::Video: case Page::Sound: case Page::Input: case Page::Extras: return Page::Options;
+    case Page::Cheats: return Page::Extras;
+    case Page::Keys: return Page::Controls;
+    default: return Page::Closed;
+    }
 }
 
 void Menu::set_page(Page p) {
@@ -54,6 +65,10 @@ void Menu::set_page(Page p) {
     if (p == Page::Front) build_front();
     else if (p == Page::Main) build_main();
     else if (p == Page::Options) build_options();
+    else if (p == Page::Video) build_video();
+    else if (p == Page::Sound) build_sound();
+    else if (p == Page::Input) build_input();
+    else if (p == Page::Extras) build_extras();
     else if (p == Page::Controls) build_controls();
     else if (p == Page::Keys) build_keys();
     else if (p == Page::TimeAttack) build_time_attack();
@@ -81,6 +96,10 @@ bool Menu::show_page(const std::string& name) {
     }
     else if (name == "main") set_page(Page::Main);
     else if (name == "options") set_page(Page::Options);
+    else if (name == "video") set_page(Page::Video);
+    else if (name == "sound") set_page(Page::Sound);
+    else if (name == "input") set_page(Page::Input);
+    else if (name == "extras") set_page(Page::Extras);
     else if (name == "awards") set_page(Page::Achievements);
     else return false;
     return true;
@@ -91,6 +110,10 @@ std::string Menu::page_name() const {
     case Page::Front: return "front";
     case Page::Main: return "main";
     case Page::Options: return "options";
+    case Page::Video: return "video";
+    case Page::Sound: return "sound";
+    case Page::Input: return "input";
+    case Page::Extras: return "extras";
     case Page::Controls: return "controls";
     case Page::Keys: return "keys";
     case Page::TimeAttack: return "timeattack";
@@ -354,6 +377,15 @@ void Menu::build_keys() {
 
 void Menu::build_options() {
     items_.clear();
+    items_.push_back({"VIDEO", {}, [this](int) { set_page(Page::Video); }});
+    items_.push_back({"SOUND", {}, [this](int) { set_page(Page::Sound); }});
+    items_.push_back({"INPUT", {}, [this](int) { set_page(Page::Input); }});
+    items_.push_back({"EXTRAS", {}, [this](int) { set_page(Page::Extras); }});
+    items_.push_back({"BACK", {}, [this](int) { const Page back = return_to_; set_page(back); }});
+}
+
+void Menu::build_video() {
+    items_.clear();
     Config* c = cfg_;
     if (!c) return;
     auto video = [this] { if (hooks_.apply_video) hooks_.apply_video(); };
@@ -385,6 +417,13 @@ void Menu::build_options() {
     items_.push_back({"V-SYNC",
                       [c] { return on_off(c->vsync); },
                       [c, video](int s) { if (s) { c->vsync = !c->vsync; video(); } }});
+    items_.push_back({"BACK", {}, [this](int) { set_page(Page::Options); }});
+}
+
+void Menu::build_sound() {
+    items_.clear();
+    Config* c = cfg_;
+    if (!c) return;
     items_.push_back({"SOUND",
                       [c] { return on_off(c->audio); },
                       [c](int s) { if (s) c->audio = !c->audio; }});
@@ -397,12 +436,26 @@ void Menu::build_options() {
     items_.push_back({"EFFECTS",
                       [c] { return std::to_string(c->effects_volume); },
                       [c](int s) { c->effects_volume = std::clamp(c->effects_volume + s * 5, 0, 100); }});
+    items_.push_back({"BACK", {}, [this](int) { set_page(Page::Options); }});
+}
+
+void Menu::build_input() {
+    items_.clear();
+    Config* c = cfg_;
+    if (!c) return;
     items_.push_back({"TOUCH PAD",
                       [c] { return std::string(kTouchNames[int(c->touch)]); },
                       [c](int s) { if (s) cycle(c->touch, 3, s); }});
     items_.push_back({"6-BUTTON PAD",
                       [c] { return on_off(c->six_button); },
                       [c](int s) { if (s) c->six_button = !c->six_button; }});
+    items_.push_back({"BACK", {}, [this](int) { set_page(Page::Options); }});
+}
+
+void Menu::build_extras() {
+    items_.clear();
+    Config* c = cfg_;
+    if (!c) return;
     items_.push_back({"CHEATS", [c] { return c->cheats.empty() && c->cheat_codes.empty() ? std::string("OFF") : std::string("ON"); },
                       [this](int step) { if (step == 0) set_page(Page::Cheats); }});
     items_.back().pressed = true;
@@ -431,7 +484,7 @@ void Menu::build_options() {
                }};
     reset.pressed = true;
     items_.push_back(std::move(reset));
-    items_.push_back({"BACK", {}, [this](int) { const Page back = return_to_; set_page(back); }});
+    items_.push_back({"BACK", {}, [this](int) { set_page(Page::Options); }});
 }
 
 // Issue #20: the built-in cheats, and whether the config adds codes of its
@@ -461,7 +514,7 @@ void Menu::build_cheats() {
     Item note{"NO AWARDS OR RECORDS WHILE ON", {}, {}};
     note.read_only = true;
     items_.push_back(std::move(note));
-    items_.push_back({"BACK", {}, [this](int) { set_page(Page::Options); }});
+    items_.push_back({"BACK", {}, [this](int) { set_page(Page::Extras); }});
 }
 
 void Menu::move(int delta) {
@@ -500,7 +553,8 @@ void Menu::back_out() {
     if (is_row_page(page_)) {
         close();
     } else {
-        set_page(return_to_);
+        const Page up = parent_of(page_);
+        set_page(up != Page::Closed ? up : return_to_);
     }
 }
 
@@ -648,8 +702,7 @@ void Menu::draw(ui::Ui& g, achievements::Tracker& ach) {
         draw_front(g);
     else if (page_ == Page::Main)
         draw_row_page(g, "Left/Right choose    Enter select    Esc close");
-    else if (page_ == Page::Options || page_ == Page::Controls || page_ == Page::Keys ||
-             page_ == Page::TimeAttack)
+    else if (is_list_page(page_))
         draw_options(g);
     else
         draw_achievements(g, ach);
@@ -783,6 +836,10 @@ void Menu::draw_options(ui::Ui& g) {
 
     const char* heading = page_ == Page::TimeAttack ? "TIME ATTACK"
                         : page_ == Page::Cheats ? "CHEATS"
+                        : page_ == Page::Video ? "VIDEO"
+                        : page_ == Page::Sound ? "SOUND"
+                        : page_ == Page::Input ? "INPUT"
+                        : page_ == Page::Extras ? "EXTRAS"
                         : page_ == Page::Controls ? "CONTROLS"
                         : page_ == Page::Keys
                               ? (keys_player_ == 0 ? (keys_pad_ ? "1P GAMEPAD" : "1P KEYBOARD")

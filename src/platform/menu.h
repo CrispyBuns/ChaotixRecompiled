@@ -81,7 +81,10 @@ public:
     void draw_backdrop_dim(ui::Ui& g) const;
 
 private:
-    enum class Page { Closed, Front, Main, Options, Controls, Keys, TimeAttack, Achievements, Cheats };
+    // OPTIONS is a list of categories; each category is a page of its own, so
+    // that no page runs off a phone's screen.
+    enum class Page { Closed, Front, Main, Options, Video, Sound, Input, Extras, Controls, Keys, TimeAttack,
+                      Achievements, Cheats };
 
     struct Item {
         std::string label;
@@ -110,6 +113,11 @@ private:
     void build_front();
     void build_main();
     void build_options();
+    void build_video();
+    void build_sound();
+    void build_input();
+    void build_extras();
+    static Page parent_of(Page p);
     void build_cheats();
     void build_controls();
     void build_time_attack();

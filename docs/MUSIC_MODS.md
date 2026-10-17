@@ -81,8 +81,8 @@ with a pause, checked). Without files nothing changes: no request is altered.
   1 kHz, where the game's music had energy.
 
 On Android the folder is `ChaotixRecompiled/Mods/Music` in the phone's storage
-once the app may use it (OPTIONS > MODS FOLDER asks for Android's "All files
-access"; since 0.4.3), and `Android/data/org.chaotixrecompiled/files/Mods/Music`
+once the app may use it (OPTIONS > EXTRAS > MODS FOLDER asks for Android's
+"All files access"; since 0.4.3), and `Android/data/org.chaotixrecompiled/files/Mods/Music`
 before that, which on Android 11 and later only a computer can reach.
 
 Not done: other formats (OGG, FLAC, MP3 need a decoder library), replacing

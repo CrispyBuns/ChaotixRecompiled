@@ -16,7 +16,7 @@ rejected rather than silently doing nothing.
 
 ## Using them
 
-OPTIONS > CHEATS switches the built-in ones on and off:
+OPTIONS > EXTRAS > CHEATS switches the built-in ones on and off:
 
 | key | menu | effect | checked by |
 | --- | --- | --- | --- |

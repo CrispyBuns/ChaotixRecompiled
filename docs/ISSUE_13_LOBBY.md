@@ -47,6 +47,6 @@ attract demos stay widescreen.
 
 ## Option: widescreen anyway (issue #21)
 
-`WidescreenEverywhere = true` in `[Video]`, or OPTIONS > WIDE LOBBY, widens
+`WidescreenEverywhere = true` in `[Video]`, or OPTIONS > VIDEO > WIDE LOBBY, widens
 the lobby and the INTRODUCTION Eggman scene again, with the glitches described
 above. Off by default. Test: `widescreen_lobby_when_asked`.

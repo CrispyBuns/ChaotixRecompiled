@@ -954,7 +954,7 @@ int main(int argc, char** argv) {
     // behind it and its title screen and attract demo are the backdrop.
     app.menu.open_front();
     if (!menu_page.empty() && !app.menu.show_page(menu_page))
-        LOGW("app", "--menu: unknown page '%s' (front, main, options, controls, awards)",
+        LOGW("app", "--menu: unknown page '%s' (front, main, options, video, sound, input, extras, controls, cheats, awards)",
              menu_page.c_str());
 
     // An explicit ROM (including an Explorer drop onto the EXE) is installed
