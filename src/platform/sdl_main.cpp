@@ -116,6 +116,13 @@ struct App {
     // request is waiting, Start is tapped for it. Counts frames since the
     // request, to pace the taps and to give up rather than press for ever.
     int stage_kick = -1;
+    // --stage FRAME:PLACE:LEVEL:TIME:PLAYER:PARTNER:2P, for testing: any
+    // place, the special stage included, started as TIME ATTACK starts one.
+    uint64_t cli_stage_frame = 0;
+    stage_select::Request cli_stage{};
+    std::function<void(const stage_select::Request&)> start_stage;
+    // --log-timing: a line a second with the frame rate and the slowest pass.
+    bool log_timing = false;
     // A time attack run in progress. The game has no idea it is one: when the
     // run ends, however it ends, it sends the player to its own lobby. So the
     // frontend watches the zone and level, and when they are no longer the
@@ -244,7 +251,7 @@ std::vector<std::string> rom_search_dirs(const App& app) {
 // not confused with one of them.
 bool option_takes_value(const std::string& a) {
     static const char* with_value[] = {"--aspect", "--autotest", "--autotest-shot", "--window-size",
-                                       "--press", "--user-dir", "--install", "--menu", "--keys", "--shots", "--hold", "--record-input", "--mods-dir"};
+                                       "--press", "--user-dir", "--install", "--menu", "--keys", "--shots", "--hold", "--record-input", "--mods-dir", "--stage"};
     for (const char* o : with_value)
         if (a == o) return true;
     return false;
@@ -643,6 +650,7 @@ void load_touch_skin(App& app, const std::string& dir) {
         if (FILE* f = std::fopen(readme.c_str(), "w")) {
             std::fputs("Touch control images. Put BMP files here (32-bit keeps transparency):\n"
                        "  dpad.bmp a.bmp b.bmp c.bmp x.bmp y.bmp z.bmp start.bmp\n"
+                       "  stick.bmp and knob.bmp for the joystick (OPTIONS > INPUT > TOUCH STICK).\n"
                        "  button.bmp is used for any face button without its own file.\n"
                        "  <name>_pressed.bmp is drawn while that button is held.\n"
                        "Each image is stretched to the button's square; a missing one is drawn as before.\n",
@@ -651,7 +659,7 @@ void load_touch_skin(App& app, const std::string& dir) {
         }
     }
     int loaded = 0;
-    for (const char* name : {"dpad", "a", "b", "c", "x", "y", "z", "start", "button"}) {
+    for (const char* name : {"dpad", "stick", "knob", "a", "b", "c", "x", "y", "z", "start", "button"}) {
         for (int pressed = 0; pressed < 2; ++pressed) {
             const std::string path = dir + "/" + name + (pressed ? "_pressed" : "") + ".bmp";
             SDL_Surface* s = SDL_LoadBMP(path.c_str());
@@ -700,9 +708,55 @@ SDL_Texture* touch_image(const App& app, const TouchButton& b, bool on) {
     return nullptr;
 }
 
+void fill_circle(SDL_Renderer* r, float cx, float cy, float radius, SDL_FColor c) {
+    constexpr int kSteps = 32;
+    SDL_Vertex v[kSteps + 1];
+    int idx[kSteps * 3];
+    v[0] = {{cx, cy}, c, {0, 0}};
+    for (int i = 0; i < kSteps; ++i) {
+        const float a = float(i) * 2.0f * SDL_PI_F / float(kSteps);
+        v[i + 1] = {{cx + std::cos(a) * radius, cy + std::sin(a) * radius}, c, {0, 0}};
+        idx[i * 3] = 0;
+        idx[i * 3 + 1] = i + 1;
+        idx[i * 3 + 2] = (i + 1) % kSteps + 1;
+    }
+    SDL_RenderGeometry(r, nullptr, v, kSteps + 1, idx, kSteps * 3);
+}
+
+// The joystick (issue #30): its base where the d-pad would be, and the knob
+// where the thumb has pushed it.
+void draw_touch_stick(App& app, const TouchButton& b) {
+    const bool on = app.touch.stick_held();
+    auto image = [&app, on](const char* name) -> SDL_Texture* {
+        auto it = app.touch_skin.find(name);
+        if (it == app.touch_skin.end()) return nullptr;
+        return on && it->second[1] ? it->second[1] : it->second[0];
+    };
+    const float kx = b.cx + app.touch.knob_dx(), ky = b.cy + app.touch.knob_dy();
+    const float kr = b.r * 0.45f;
+    if (SDL_Texture* img = image("stick")) {
+        SDL_SetTextureAlphaMod(img, on ? 255 : 170);
+        const SDL_FRect dst{b.cx - b.r, b.cy - b.r, b.r * 2, b.r * 2};
+        SDL_RenderTexture(app.renderer, img, nullptr, &dst);
+    } else {
+        fill_circle(app.renderer, b.cx, b.cy, b.r, {1, 1, 1, on ? 0.25f : 0.14f});
+    }
+    if (SDL_Texture* img = image("knob")) {
+        SDL_SetTextureAlphaMod(img, on ? 255 : 170);
+        const SDL_FRect dst{kx - kr, ky - kr, kr * 2, kr * 2};
+        SDL_RenderTexture(app.renderer, img, nullptr, &dst);
+    } else {
+        fill_circle(app.renderer, kx, ky, kr, {1, 1, 1, on ? 0.55f : 0.32f});
+    }
+}
+
 void draw_touch_controls(App& app, uint16_t held) {
     SDL_SetRenderDrawBlendMode(app.renderer, SDL_BLENDMODE_BLEND);
     for (const auto& b : app.touch.buttons()) {
+        if (b.is_dpad && app.touch.stick()) {
+            draw_touch_stick(app, b);
+            continue;
+        }
         bool on = b.is_dpad ? (held & (PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT)) != 0 : (held & b.mask) != 0;
         if (SDL_Texture* img = touch_image(app, b, on)) {
             // Without a pressed image, a held button is drawn brighter.
@@ -836,6 +890,19 @@ int main(int argc, char** argv) {
         else if (a == "--window-size" && i + 1 < argc) {
             int w = 0, h = 0;
             if (std::sscanf(argv[++i], "%dx%d", &w, &h) == 2) { app.cfg.raw["cli.w"] = std::to_string(w); app.cfg.raw["cli.h"] = std::to_string(h); }
+        } else if (a == "--stage" && i + 1 < argc) {
+            unsigned f = 0, pl = 0, lv = 0, tm = 0, pc = 0, cc = 0, two = 0;
+            if (std::sscanf(argv[++i], "%u:%u:%u:%u:%u:%u:%u", &f, &pl, &lv, &tm, &pc, &cc, &two) == 7) {
+                app.cli_stage_frame = std::max(1u, f);
+                app.cli_stage.place = uint16_t(pl);
+                app.cli_stage.level = uint16_t(lv);
+                app.cli_stage.attime = uint16_t(tm);
+                app.cli_stage.player = uint16_t(pc);
+                app.cli_stage.combi = uint16_t(cc);
+                app.cli_stage.two_players = two != 0;
+            }
+        } else if (a == "--log-timing") {
+            app.log_timing = true;
         } else if ((a == "--press" || a == "--hold") && i + 1 < argc) {
             const bool host = a == "--hold";
             // FRAME:BUTTON[+BUTTON]:DURATION
@@ -948,6 +1015,7 @@ int main(int argc, char** argv) {
             std::error_code ec;
             std::filesystem::remove(achievements_progress_path(app), ec);
         };
+        app.start_stage = hooks.start_stage;
         app.menu.set_hooks(std::move(hooks));
     }
     // The menu is the front end, so it is up from the start: the game boots
@@ -1056,6 +1124,8 @@ int main(int argc, char** argv) {
     uint64_t last = SDL_GetPerformanceCounter();
     double accumulator = 0;
     uint64_t fps_t0 = last, fps_frames = 0, fps_sims = 0;
+    uint64_t pass_start = last;
+    double worst_pass = 0, worst_emu = 0, worst_present = 0;
 
     bool menu_was_open = app.menu.open();
     while (app.running) {
@@ -1104,12 +1174,14 @@ int main(int argc, char** argv) {
                         break;
                     }
                 }
-                app.fingers[e.tfinger.fingerID] = app.touch.hit(tx, ty);
+                app.fingers[e.tfinger.fingerID] =
+                    app.touch.finger(uint64_t(e.tfinger.fingerID), tx, ty, e.type == SDL_EVENT_FINGER_DOWN);
                 break;
             }
             case SDL_EVENT_FINGER_UP: case SDL_EVENT_FINGER_CANCELED:
                 if (app.menu.open()) { app.menu.on_touch_up(); break; }
                 app.fingers.erase(e.tfinger.fingerID);
+                app.touch.lift(uint64_t(e.tfinger.fingerID));
                 break;
             case SDL_EVENT_WINDOW_FOCUS_LOST: case SDL_EVENT_WILL_ENTER_BACKGROUND:
             case SDL_EVENT_DID_ENTER_BACKGROUND: case SDL_EVENT_TERMINATING:
@@ -1163,6 +1235,11 @@ int main(int argc, char** argv) {
             app.m->wide_extra = app.cfg.widescreen ? widescreen_extra(fa, patches::kMaxWideExtra) : 0;
             // A frame taller than 4:3 gets extra rows below instead.
             app.m->wide_extra_bottom = app.cfg.widescreen ? widescreen_rows(fa, patches::kMaxWideExtraBottom) : 0;
+        }
+        if (app.cli_stage_frame && app.m->frame_count >= app.cli_stage_frame && app.start_stage) {
+            app.cli_stage_frame = 0;
+            app.menu.close();
+            app.start_stage(app.cli_stage);
         }
         int steps = 0;
         const int max_steps = app.fast_forward ? 8 : 3;
@@ -1277,7 +1354,7 @@ int main(int argc, char** argv) {
             SDL_RenderTexture(app.renderer, app.texture, &src, &art);
         }
         if (app.touch_enabled) {
-            app.touch.layout(ow, oh);
+            app.touch.layout(ow, oh, app.cfg.touch_stick);
             draw_touch_controls(app, touch_held);
         }
         if (app.ui.ready()) {
@@ -1322,10 +1399,22 @@ int main(int argc, char** argv) {
         SDL_RenderPresent(app.renderer);
         app.timing.present_ms = double(SDL_GetPerformanceCounter() - pr_t0) * 1000.0 / double(freq);
         ++fps_frames;
+        {
+            const uint64_t pass_end = SDL_GetPerformanceCounter();
+            worst_pass = std::max(worst_pass, double(pass_end - pass_start) * 1000.0 / double(freq));
+            worst_emu = std::max(worst_emu, app.timing.emu_ms * steps);
+            worst_present = std::max(worst_present, app.timing.present_ms);
+            pass_start = pass_end;
+        }
         if (now - fps_t0 > freq) {
             double s = double(now - fps_t0) / double(freq);
             app.timing.render_fps = double(fps_frames) / s;
             app.timing.sim_fps = double(fps_sims) / s;
+            if (app.log_timing)
+                LOGI("timing", "frame %llu: %.1f presented/s, %.1f emulated/s, slowest pass %.1f ms (emulation %.1f, present %.1f)",
+                     (unsigned long long)app.m->frame_count, app.timing.render_fps, app.timing.sim_fps, worst_pass,
+                     worst_emu, worst_present);
+            worst_pass = worst_emu = worst_present = 0;
             fps_frames = fps_sims = 0;
             fps_t0 = now;
         }

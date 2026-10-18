@@ -504,6 +504,8 @@ int main(int argc, char** argv) {
         }
         std::printf("achievements: %zu definitions, %d points\n", tracker.list().size(), tracker.points_total());
     }
+    double worst_ms = 0;
+    uint64_t worst_frame = 0, slow_frames = 0, sram_frames = 0;
     auto t0 = std::chrono::steady_clock::now();
     for (uint64_t f = 0; f < frames; ++f) {
         uint16_t btn = 0;
@@ -588,7 +590,18 @@ int main(int argc, char** argv) {
         cheats::apply(*m, cheat_writes);
         if (ref) cheats::apply(*ref, cheat_writes);
         const size_t first_sample = m->audio_out.size();
+        const auto frame_t0 = std::chrono::steady_clock::now();
         m->run_frame();
+        {
+            // The worst frames, not just the average: a stall now and then
+            // shows up as lag even when the average is far below 16 ms.
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frame_t0).count();
+            if (ms > worst_ms) { worst_ms = ms; worst_frame = f; }
+            if (ms > 8.0) ++slow_frames;
+            // And how often the save changed: the frontend writes it to disk
+            // a second after a change.
+            if (m->sram_dirty) { ++sram_frames; m->sram_dirty = false; }
+        }
         if (!music_dir.empty()) music.after_frame(*m, first_sample);
         if (m->wide_active) {
             ++wide_live_frames;
@@ -722,6 +735,9 @@ int main(int argc, char** argv) {
         for (int i = 0; i < PROF_COUNT; ++i)
             std::printf(" %s %.3f (%.0f%%)", names[i], m->stats.prof_ns[i] / 1e6 / double(frames), 100.0 * m->stats.prof_ns[i] / total);
         std::printf(" | total %.3f\n", total / 1e6 / double(frames));
+        std::printf("worst frame %.3f ms (frame %llu), %llu frames over 8 ms\n", worst_ms,
+                    (unsigned long long)worst_frame, (unsigned long long)slow_frames);
+        std::printf("save RAM changed on %llu frames\n", (unsigned long long)sram_frames);
     }
     if (!wav_path.empty()) {
         if (write_wav(wav_path, wav, int(kAudioRate + 0.5))) std::printf("audio written to %s (%zu samples)\n", wav_path.c_str(), wav.size() / 2);

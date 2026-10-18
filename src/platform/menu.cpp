@@ -446,6 +446,10 @@ void Menu::build_input() {
     items_.push_back({"TOUCH PAD",
                       [c] { return std::string(kTouchNames[int(c->touch)]); },
                       [c](int s) { if (s) cycle(c->touch, 3, s); }});
+    items_.push_back({"TOUCH STICK",
+                      [c] { return std::string(c->touch_stick ? "JOYSTICK" : "D-PAD"); },
+                      [c](int s) { if (s) c->touch_stick = !c->touch_stick; },
+                      "the on-screen directions"});
     items_.push_back({"6-BUTTON PAD",
                       [c] { return on_off(c->six_button); },
                       [c](int s) { if (s) c->six_button = !c->six_button; }});

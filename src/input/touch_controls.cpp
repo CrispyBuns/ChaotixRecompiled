@@ -5,14 +5,16 @@
 
 namespace chaotix {
 
-void TouchControls::layout(int w, int h) {
+void TouchControls::layout(int w, int h, bool stick) {
     buttons_.clear();
+    if (stick != stick_ && stick_held_) lift(stick_finger_);
+    stick_ = stick;
     const float unit = float(std::min(w, h));
     const float pad_r = unit * 0.17f;
     const float btn_r = unit * 0.075f;
     const float margin = unit * 0.05f;
     // D-pad bottom-left
-    buttons_.push_back({0, margin + pad_r, float(h) - margin - pad_r, pad_r, "D-PAD", true});
+    buttons_.push_back({0, margin + pad_r, float(h) - margin - pad_r, pad_r, stick ? "STICK" : "D-PAD", true});
     // A B C bottom-right in an arc, X Y Z above
     const float bx = float(w) - margin - btn_r;
     const float by = float(h) - margin - btn_r;
@@ -33,17 +35,55 @@ uint16_t TouchControls::hit(float x, float y) const {
         float d = std::sqrt(dx * dx + dy * dy);
         if (b.is_dpad) {
             if (d > b.r * 1.3f || d < b.r * 0.15f) continue;
-            // 8-way: directions within +-67.5 degrees of an axis are active.
-            float ax = dx / d, ay = dy / d;
-            if (ax > 0.38f) out |= PAD_RIGHT;
-            if (ax < -0.38f) out |= PAD_LEFT;
-            if (ay > 0.38f) out |= PAD_DOWN;
-            if (ay < -0.38f) out |= PAD_UP;
+            out |= stick_directions(dx, dy);
         } else if (d <= b.r * 1.15f) {
             out |= b.mask;
         }
     }
     return out;
+}
+
+// 8-way: directions within +-67.5 degrees of an axis are active.
+uint16_t TouchControls::stick_directions(float dx, float dy) const {
+    const float d = std::sqrt(dx * dx + dy * dy);
+    if (d <= 0) return 0;
+    const float ax = dx / d, ay = dy / d;
+    uint16_t out = 0;
+    if (ax > 0.38f) out |= PAD_RIGHT;
+    if (ax < -0.38f) out |= PAD_LEFT;
+    if (ay > 0.38f) out |= PAD_DOWN;
+    if (ay < -0.38f) out |= PAD_UP;
+    return out;
+}
+
+uint16_t TouchControls::finger(uint64_t id, float x, float y, bool down) {
+    if (!stick_ || buttons_.empty()) return hit(x, y);
+    const TouchButton& base = buttons_[0];
+    const float dx = x - base.cx, dy = y - base.cy;
+    const float d = std::sqrt(dx * dx + dy * dy);
+    if (down && !stick_held_ && d <= base.r * 1.3f) { stick_held_ = true; stick_finger_ = id; }
+    if (!stick_held_ || id != stick_finger_) {
+        // Any other finger presses only the buttons, never the stick.
+        uint16_t out = 0;
+        for (size_t i = 1; i < buttons_.size(); ++i) {
+            const TouchButton& b = buttons_[i];
+            const float bx = x - b.cx, by = y - b.cy;
+            if (std::sqrt(bx * bx + by * by) <= b.r * 1.15f) out |= b.mask;
+        }
+        return out;
+    }
+    const float k = d > base.r ? base.r / d : 1.0f;
+    knob_dx_ = dx * k;
+    knob_dy_ = dy * k;
+    // A quarter of the way out before it counts, so resting a thumb on the
+    // stick does not walk the character.
+    return d < base.r * 0.25f ? 0 : stick_directions(dx, dy);
+}
+
+void TouchControls::lift(uint64_t id) {
+    if (!stick_held_ || id != stick_finger_) return;
+    stick_held_ = false;
+    knob_dx_ = knob_dy_ = 0;
 }
 
 } // namespace chaotix

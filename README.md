@@ -226,6 +226,12 @@ Touch controls can be reskinned: BMP images named after the buttons
 `<name>_pressed.bmp` while held) in `Mods/Touch`. The folder holds a
 README.txt that lists them.
 
+OPTIONS > INPUT > TOUCH STICK turns the touch d-pad into a joystick
+(`TouchStick = true` in `[Input]`): the thumb that lands on it keeps it until
+lifted, and steers even after sliding off the base. Its images are
+`stick.bmp` (the base) and `knob.bmp`, each with an optional `_pressed`
+version.
+
 The `Mods` folder is in the user data folder. On Android it is
 `ChaotixRecompiled/Mods` in the phone's storage once you allow it (OPTIONS >
 EXTRAS > MODS FOLDER opens Android's "All files access" page), and

@@ -89,3 +89,33 @@ TEST(viewport, extra_rows_for_tall_frames) {
     CHECK_EQ(widescreen_rows(1.0, 16), 16);         // capped
     CHECK(std::fabs(image_aspect_for_size(320, 320, 240, 224) - (4.0 / 3.0) * 224.0 / 240.0) < 1e-9);
 }
+
+TEST(input, touch_joystick_follows_the_thumb) {
+    // Issue #30: the directions as a joystick. A finger that lands on it keeps
+    // it until lifted, steering even off the base; other fingers press only
+    // buttons.
+    TouchControls t;
+    t.layout(1920, 1080, true);
+    const TouchButton& s = t.buttons()[0];
+    CHECK(s.is_dpad && t.stick());
+    CHECK_EQ(t.finger(1, s.cx + s.r * 0.1f, s.cy, true), uint16_t(0));     // resting
+    CHECK(t.stick_held());
+    CHECK_EQ(t.finger(1, s.cx + s.r * 0.6f, s.cy, false), uint16_t(PAD_RIGHT));
+    CHECK_EQ(t.finger(1, s.cx - s.r * 3.0f, s.cy - s.r * 3.0f, false), uint16_t(PAD_LEFT | PAD_UP));
+    CHECK(std::fabs(t.knob_dx() * t.knob_dx() + t.knob_dy() * t.knob_dy() - s.r * s.r) < 1.0f);  // at the rim
+    // A second finger on a button presses the button, not the stick.
+    const TouchButton& c = t.buttons()[1];
+    CHECK_EQ(t.finger(2, c.cx, c.cy, true), c.mask);
+    CHECK_EQ(t.finger(2, s.cx + s.r * 0.6f, s.cy, false), uint16_t(0));
+    t.lift(2);
+    CHECK(t.stick_held());
+    t.lift(1);
+    CHECK(!t.stick_held());
+    CHECK(t.knob_dx() == 0 && t.knob_dy() == 0);
+    // Landing well away from it does not take it.
+    CHECK_EQ(t.finger(3, s.cx + s.r * 3.0f, s.cy, true), uint16_t(0));
+    CHECK(!t.stick_held());
+    // The d-pad layout still works as before.
+    t.layout(1920, 1080, false);
+    CHECK_EQ(t.finger(4, s.cx + s.r * 0.8f, s.cy, true), uint16_t(PAD_RIGHT));
+}
