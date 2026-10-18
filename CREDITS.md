@@ -56,6 +56,10 @@ people below. Thank you all: every report here led to a fix or a feature.
   edge ([#28](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/28)).
 - **[DoodleDiskette](https://github.com/DoodleDiskette)**: a reachable Mods
   folder on Android ([#29](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/29)).
+- **[stuffinix](https://github.com/stuffinix)**: the touch joystick
+  ([#30](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/30)).
+- **[DanKorell](https://github.com/DanKorell)**: the lines in the menu text
+  ([#5](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/5)).
 - **[iisonic707ii-spec](https://github.com/iisonic707ii-spec)**: the special
   stage's black lines and its widescreen in play
   ([#21](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/21)).
