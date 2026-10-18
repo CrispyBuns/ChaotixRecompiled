@@ -191,7 +191,10 @@ float Ui::text(Font f, float x, float y, const std::string& s, Color c) {
     TTF_Text* t = acquire(f, s);
     if (!t) return 0;
     TTF_SetTextColor(t, c.r, c.g, c.b, c.a);
-    TTF_DrawRendererText(t, x, y);
+    // Whole pixels only: at a fractional position the glyphs are sampled
+    // between texels, which blurs the pixel face and picks up thin lines
+    // from the neighbouring glyphs in the atlas (issue #5).
+    TTF_DrawRendererText(t, std::round(x), std::round(y));
     int w = 0, h = 0;
     TTF_GetTextSize(t, &w, &h);
     return float(w);

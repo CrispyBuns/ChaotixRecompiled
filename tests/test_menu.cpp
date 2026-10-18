@@ -702,3 +702,31 @@ TEST(menu, the_cheats_page_is_drawn_as_a_list) {
     d.tap(m, 640, y);
     CHECK(cfg.cheats.count("speed") == 1);
 }
+
+TEST(menu, text_lands_on_whole_pixels) {
+    // Issue #5 (a comment from 0.4.3): at fractional positions the pixel face
+    // was sampled between texels and showed thin lines from its neighbours in
+    // the glyph atlas. Text at x + 0.4 must look exactly like text at x.
+    Drawn d;
+    CHECK(d.ok);
+    if (!d.ok) return;
+    auto grab = [&d](float x, float y) {
+        SDL_SetRenderDrawColor(d.renderer, 0, 0, 0, 255);
+        SDL_RenderClear(d.renderer);
+        d.g.begin_frame();
+        d.g.text(ui::Font::Pixel, x, y, "OPTIONS CONTROLS", ui::theme::accent);
+        d.g.end_frame();
+        SDL_RenderPresent(d.renderer);
+        SDL_Surface* s = SDL_RenderReadPixels(d.renderer, nullptr);
+        std::vector<uint8_t> px;
+        if (s) {
+            const auto* p = static_cast<const uint8_t*>(s->pixels);
+            px.assign(p, p + size_t(s->pitch) * size_t(s->h));
+            SDL_DestroySurface(s);
+        }
+        return px;
+    };
+    const auto whole = grab(100.0f, 100.0f);
+    CHECK(!whole.empty());
+    CHECK(grab(100.4f, 100.3f) == whole);
+}
