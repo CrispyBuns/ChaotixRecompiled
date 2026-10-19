@@ -172,7 +172,6 @@ void set_special_projection(Machine& m, int shift) {
             if (w == add || !is_add_to(w, c.reg)) continue;
             m.sdram[off] = uint8_t(add >> 8);
             m.sdram[off + 1] = uint8_t(add);
-            ++m.sdram_code_epoch;
         }
     }
 }
@@ -187,7 +186,6 @@ void set_hud_shift(Machine& m, int shift) {
         if ((w & 0xFF00) != 0xE100 || sdram16(m, h.sdram + 2) != h.next || w == mov) continue;
         m.sdram[h.sdram] = uint8_t(mov >> 8);
         m.sdram[h.sdram + 1] = uint8_t(mov);
-        ++m.sdram_code_epoch;
     }
 }
 

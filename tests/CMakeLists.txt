@@ -162,6 +162,21 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
                 --stage 300:10:2:0:2:7:0 --poke 450:DFDE:00 --poke 450:DFDF:18)
     set_tests_properties(special_stage_is_widescreen_in_the_level_mode PROPERTIES TIMEOUT 600
         PASS_REGULAR_EXPRESSION "margins live from frame 4[0-4][0-9].*margins live for 7[0-9][0-9] frames in 1 stretches")
+    # Issue #31: the special stage ran in the interpreter (no coverage of it,
+    # and the widescreen patches invalidated its busiest routines), enough to
+    # lag a slow PC. It must run recompiled, widescreen included.
+    add_test(NAME special_stage_runs_recompiled
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1500 --wide 53
+                --stage 300:10:0:0:2:7:0 --fuzz 99:700:1500)
+    set_tests_properties(special_stage_runs_recompiled PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "\\(100\\.0% native\\); MSH2 (100\\.0|9[5-9]\\.[0-9])% native; SSH2 100\\.0% native")
+    # Recompiled, the special stage read the words it keeps after its code as
+    # the ROM's constants after it had changed them; this stage and input
+    # diverged from the interpreter at frame 1104.
+    add_test(NAME lockstep_special_stage_variables
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1300 --lockstep
+                --stage 300:10:3:0:4:3:0 --fuzz 7:700:2400)
+    set_tests_properties(lockstep_special_stage_variables PROPERTIES TIMEOUT 900)
 
     add_test(NAME golden_frames_16_9
         COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3200 --wide 53 ${_script}

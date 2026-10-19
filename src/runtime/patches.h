@@ -187,8 +187,8 @@ constexpr uint8_t kLevelPlaneSize = 0x01;
 // that fill and clears the whole widened line instead, unmoved; moved, it
 // would leave the right of the picture uncleared.
 //
-// The code patch bumps sdram_code_epoch, so recompiled code that covers those
-// bytes is revalidated and the interpreter runs the patched routine.
+// The recompiled code reads those immediates as it runs (see
+// is_patched_sh2_immediate below), so it stays valid when they change.
 constexpr uint32_t kSpecialRectSdram = 0x3844;
 constexpr int16_t kSpecialRect[4] = {16, 303, 4, 219};
 // The stage frames its 4:3 picture with black Mega Drive sprites of this
@@ -223,13 +223,29 @@ constexpr CentreAdd kSpecialCentreAdds[] = {
 // left margin that shows the level (margin_cut blacks out the rest near a
 // level's start), so the HUD keeps to the left edge of the picture. The level
 // clip already reaches into the margin, and its pixels there go to the
-// shadow like any sprite's. Like the special stage's code patch, this bumps
-// sdram_code_epoch.
+// shadow like any sprite's. Like the special stage's adds, the recompiled code
+// reads these immediates as it runs.
 struct HudBase { uint32_t sdram; uint16_t next; };
 constexpr HudBase kHudBaseX[] = {
     {0x0CA2, 0xE210}, {0x0CAC, 0xE220}, {0x0CB4, 0xE230}, {0x0CC0, 0xE210}, {0x0CCA, 0xAFF4},
 };
 constexpr int kHudX = 32;
+
+// The SH-2 immediates above change at run time: the special stage's ADD #80
+// pairs and the HUD's MOV #32. Code covering them used to fail validation and
+// run in the interpreter (the patches bumped sdram_code_epoch to make sure of
+// it), and those routines are the special stage's busiest (issue #31: it
+// lagged on a slow PC in widescreen). The recompiler emits
+// these instructions with the immediate byte read from SDRAM as they run, and
+// leaves that byte, and only that byte, out of the validated code.
+// `sdram` is the SDRAM offset of the instruction word.
+constexpr bool is_patched_sh2_immediate(uint32_t sdram) {
+    for (const CentreAdd& c : kSpecialCentreAdds)
+        if (sdram == c.sdram || sdram == c.sdram + 2) return true;
+    for (const HudBase& h : kHudBaseX)
+        if (sdram == h.sdram) return true;
+    return false;
+}
 
 // The special stage is drawing its tube: its code is loaded and the stage's
 // own rectangle, or the widened one, is set (its intro and results use other

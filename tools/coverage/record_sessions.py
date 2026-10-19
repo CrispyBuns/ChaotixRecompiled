@@ -52,6 +52,36 @@ SESSIONS["s20_options"] = {
             + ["--press", "3400:b:5"],
 }
 
+# Places started directly with --stage (PLACE:LEVEL:TIME:PLAYER:PARTNER:2P),
+# with pseudo-random play. The sessions above never reach the special stages,
+# the bonus stage or most levels, which then ran in the interpreter: several
+# times the work, enough to lag the special stage on a slow PC (issue #31).
+STAGE_AT = 300
+def stage_session(spec, seed, frames, extra=()):
+    return {"frames": frames,
+            "args": ["--stage", f"{STAGE_AT}:{spec}", "--fuzz", f"{seed}:{STAGE_AT + 400}:{frames}"] + list(extra)}
+
+# The seven special stages, widescreen and 4:3 (widescreen patches its code).
+for n in range(7):
+    SESSIONS[f"s30_special_{n}"] = stage_session(f"10:{n}:0:{[2, 0, 3, 4, 5, 6, 7][n]}:{[7, 2, 0, 3, 4, 5, 6][n]}:0",
+                                                 30 + n, 4000, ["--wide", "53"])
+SESSIONS["s30_special_4_3"] = stage_session("10:2:0:2:7:0", 37, 4000)
+# Entered from a level through a giant ring: the level's game mode, 0x18.
+SESSIONS["s31_special_from_level"] = stage_session("10:2:0:2:7:0", 38, 3000,
+                                                   ["--wide", "53", "--poke", "450:DFDE:00", "--poke", "450:DFDF:18"])
+# The bonus stage and the hub.
+for n in range(2):
+    SESSIONS[f"s40_bonus_{n}"] = stage_session(f"9:{n}:0:{[2, 4][n]}:{[7, 3][n]}:0", 40 + n, 4000, ["--wide", "53"])
+SESSIONS["s41_world_entrance"] = stage_session("7:0:0:2:7:0", 42, 4000, ["--wide", "53"])
+# Every level of the five places, at each time of day, with different teams.
+CHARACTERS = [0, 2, 3, 4, 5, 6, 7]
+for place in range(5):
+    for level in range(1, 6):
+        k = place * 5 + level
+        player, partner = CHARACTERS[k % 7], CHARACTERS[(k + 3) % 7]
+        SESSIONS[f"s5{place}_place{place}_level{level}"] = stage_session(
+            f"{place}:{level}:{k % 4}:{player}:{partner}:0", 50 + k, 3600, ["--wide", "53"])
+
 
 def main():
     ap = argparse.ArgumentParser()

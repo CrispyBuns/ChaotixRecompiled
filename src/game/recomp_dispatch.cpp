@@ -172,6 +172,38 @@ int m68k_call_dynamic(m68k::State* c) {
 #endif
 }
 
+static const uint32_t g_no_epoch = 0;
+const uint32_t* g_sdram_code_epoch = &g_no_epoch;
+
+uint8_t sh2_code_byte(const sh2::State* c, uint32_t addr) {
+    const uint8_t* p = chaotix::sh2_host_ptr(c->id, addr);
+    return p ? *p : 0;
+}
+
+uint16_t sh2_code16(const sh2::State* c, uint32_t addr) {
+    const uint8_t* p = chaotix::sh2_host_ptr(c->id, addr);
+    return p ? uint16_t(p[0] << 8 | p[1]) : 0;
+}
+
+uint32_t sh2_code32(const sh2::State* c, uint32_t addr) {
+    const uint8_t* p = chaotix::sh2_host_ptr(c->id, addr);
+    return p ? uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3] : 0;
+}
+
+bool sh2_callee_valid(const sh2::State* c, uint32_t* cache) {
+#if CHAOTIX_HAVE_GENERATED
+    if (!*cache) {
+        auto it = chaotix::g_sh2_map.find(c->pc);
+        if (it == chaotix::g_sh2_map.end()) return false;
+        *cache = it->second + 1;
+    }
+    return chaotix::sh2_validate(chaotix::g_sh2_fns[*cache - 1], c->id);
+#else
+    (void)c; (void)cache;
+    return false;
+#endif
+}
+
 int sh2_call_dynamic(sh2::State* c) {
 #if CHAOTIX_HAVE_GENERATED
     chaotix::Sh2FnState* s = chaotix::lookup_sh2(c);
@@ -233,6 +265,7 @@ RecompStatus install_recompiled_code(Machine& m, bool enable) {
     }
     m.remap_sh2();
     m.exec.m68k_block = m68k_exec;
+    recomp::g_sdram_code_epoch = &m.sdram_code_epoch;
     m.exec.sh2_block = sh2_exec;
     st.active = true;
     g_installed = true;

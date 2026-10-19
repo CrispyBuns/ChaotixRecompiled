@@ -11,6 +11,7 @@
 //    normally (c->pc holds the next address).
 #pragma once
 #include "cpu/m68k/m68k_ops.h"
+#include "cpu/sh2/sh2_interp.h"
 #include "cpu/sh2/sh2_ops.h"
 #include <cstddef>
 #include <cstdint>
@@ -67,6 +68,17 @@ inline bool sh2_pure_load(uint32_t a) {
 // then unwinds to the dispatcher).
 int m68k_call_dynamic(m68k::State* c);
 int sh2_call_dynamic(sh2::State* c);
+// Before generated code calls a function in RAM directly: whether its code is
+// still what it was compiled from. c->pc is the callee's entry; *cache keeps
+// which function that is (0 = not looked up yet).
+bool sh2_callee_valid(const sh2::State* c, uint32_t* cache);
+
+// SH-2 code memory as it is now: the immediates the runtime patches
+// (patches::is_patched_sh2_immediate), and PC-relative loads from SDRAM,
+// which the game can use as variables.
+uint8_t sh2_code_byte(const sh2::State* c, uint32_t addr);
+uint16_t sh2_code16(const sh2::State* c, uint32_t addr);
+uint32_t sh2_code32(const sh2::State* c, uint32_t addr);
 
 // Tables emitted by the recompiler.
 extern const M68kEntry g_m68k_entries[];
@@ -80,4 +92,12 @@ extern const char g_rom_sha1[];
 } // namespace recomp
 
 #define M68K_BOUNDARY() do { if (!::recomp::m68k_ok(c)) return 0; } while (0)
+// Self-modifying code in SDRAM (see the emitter): the current code epoch,
+// and what generated code does when it changed since the function began.
+// Mid-block, the rest of the block is interpreted, so that the scheduler
+// regains control at the boundary the interpreter would have reached.
+namespace recomp { extern const uint32_t* g_sdram_code_epoch; }
+#define SH2_CODE_CHANGED(next) \
+    do { if (*::recomp::g_sdram_code_epoch != e0_) { c->pc = (next); ::sh2::interp_block(c); return 1; } } while (0)
+#define SH2_CODE_CHANGED_AT_BOUNDARY() do { if (*::recomp::g_sdram_code_epoch != e0_) return 1; } while (0)
 #define SH2_BOUNDARY() do { if (!::recomp::sh2_ok(c)) return 0; } while (0)
