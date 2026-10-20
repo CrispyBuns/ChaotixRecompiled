@@ -59,9 +59,11 @@ struct KnownRom {
     RomVersion version;
 };
 
-// Knuckles' Chaotix (Japan, USA) — the only retail release.
+// Supported images: the Japan/USA retail ROM and Sonic in Chaotix Revision 2,
+// a sprite-swap hack based on that same ROM.
 const KnownRom kKnown[] = {
     {"0c2fff7bc79ed26507c08ac47464c3af19f7ced7", RomVersion::ChaotixJUE},
+    {"39651f96784feaea37657fd03687618a91707542", RomVersion::ChaotixJUE},
 };
 
 } // namespace
