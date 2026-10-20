@@ -1,6 +1,0 @@
-rom_sha1 0c2fff7bc79ed26507c08ac47464c3af19f7ced7
-m68k functions 1861 instructions 46399 entries 11147
-sh2 functions 105 instructions 5767 entries 1248 folded_literals 323 validation_ranges 220
-coverage_entries 29064
-m68k_static_recovery branch_tables 140 offset_tables 12 code_pointers 207
-sh2_fast_forward_loops 28
