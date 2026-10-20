@@ -10,8 +10,10 @@ interrupts, timers, sound chips) plus an SDL3 frontend make it an ordinary
 native program on each platform.
 
 **No game data is included.** You supply your own legally obtained ROM of
-*Knuckles' Chaotix (Japan, USA)* — SHA-1
-`0c2fff7bc79ed26507c08ac47464c3af19f7ced7`. No 32X BIOS is needed. Read
+*Knuckles' Chaotix (Japan, USA)* (SHA-1
+`0c2fff7bc79ed26507c08ac47464c3af19f7ced7`) or the *Sonic in Chaotix Revision 2*
+sprite-swap hack (SHA-1 `39651f96784feaea37657fd03687618a91707542`).
+No 32X BIOS is needed. Read
 [LEGAL.md](LEGAL.md) before building or sharing anything.
 
 ## What works
