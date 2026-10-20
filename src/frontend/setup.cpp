@@ -46,7 +46,11 @@ Candidate check_file(const std::string& path) {
     c.version = rom.version;
     c.verified = rom.version != RomVersion::Unknown;
     c.name = file_name(path);
-    c.note = c.verified ? "verified Knuckles' Chaotix" : "SHA-1 does not match the supported ROM";
+    c.note = c.verified
+        ? (c.sha1 == "39651f96784feaea37657fd03687618a91707542"
+            ? "verified Sonic in Chaotix Revision 2"
+            : "verified Knuckles' Chaotix")
+        : "SHA-1 does not match a supported ROM";
     c.label = c.name + "  -  " + c.note;
     return c;
 }
@@ -110,9 +114,10 @@ bool install(const std::string& source, const std::string& store_root, std::stri
     Candidate c = check_file(source);
     if (!c.loadable && c.sha1.empty()) return fail("Cannot read ROM: " + source + "\n" + c.note);
     if (!c.verified)
-        return fail("This ROM does not match Knuckles' Chaotix (Japan, USA).\n"
+        return fail("This ROM does not match a supported Knuckles' Chaotix image.\n"
                     "File: " + source + "\nActual SHA-1: " + c.sha1 +
-                    "\nExpected SHA-1: 0c2fff7bc79ed26507c08ac47464c3af19f7ced7\n"
+                    "\nExpected SHA-1 (Japan, USA): 0c2fff7bc79ed26507c08ac47464c3af19f7ced7\n"
+                    "Expected SHA-1 (Sonic in Chaotix Revision 2): 39651f96784feaea37657fd03687618a91707542\n"
                     "Choose a verified ROM with Browse. The installed copy was not changed.");
 
     const std::string dest = installed_rom_path(store_root);
