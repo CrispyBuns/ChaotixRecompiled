@@ -484,6 +484,10 @@ void Menu::build_extras() {
         mods.pressed = true;
         items_.push_back(std::move(mods));
     }
+    items_.push_back({"DUMP TILES",
+                      [c] { return on_off(c->dump_tiles); },
+                      [c](int s) { if (s) c->dump_tiles = !c->dump_tiles; },
+                      "save the tiles drawn to Mods/Textures/Dump"});
     items_.push_back({"AWARDS",
                       [c] { return on_off(c->achievements); },
                       [c](int s) { if (s) c->achievements = !c->achievements; }});

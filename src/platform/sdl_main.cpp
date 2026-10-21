@@ -25,6 +25,8 @@
 #include "game/recomp_dispatch.h"
 #include "input/input.h"
 #include "input/touch_controls.h"
+#include "renderer/tile_pack.h"
+#include "runtime/tile_replace.h"
 #include "renderer/image_io.h"
 #include "renderer/viewport.h"
 #include "runtime/log.h"
@@ -71,6 +73,8 @@ struct App {
     // Touch control images from Mods/Touch (issue #25), by button name;
     // [0] as drawn, [1] while pressed. A missing one is drawn as before.
     std::map<std::string, std::array<SDL_Texture*, 2>> touch_skin;
+    std::string tiles_dir;  // Mods/Textures, for the tile dumps
+    std::shared_ptr<TileReplacer> tiles;  // set on the machine every frame (copies of it may hold an older one)
     SDL_AudioStream* audio = nullptr;
     std::vector<SDL_Gamepad*> pads;
     TouchControls touch;
@@ -675,6 +679,36 @@ void load_touch_skin(App& app, const std::string& dir) {
     if (loaded) LOGI("touch", "%d touch control image(s) from %s", loaded, dir.c_str());
 }
 
+// Mega Drive tile replacements (issue #35): Mods/Textures/md_<hash>.png. With
+// DUMP TILES on, each tile drawn is also written to Mods/Textures/Dump once.
+void load_tiles(App& app) {
+    const std::string dir = mods_root(app) + "Textures";
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
+    const std::string readme = dir + "/README.txt";
+    if (!std::filesystem::exists(std::filesystem::u8path(readme), ec)) {
+        if (FILE* f = std::fopen(readme.c_str(), "w")) {
+            std::fputs("Mega Drive tile replacements: backgrounds and level art.\n"
+                       "Turn on OPTIONS > EXTRAS > DUMP TILES and play: each 8x8 tile the game draws is\n"
+                       "saved once to the Dump folder as md_<hash>.png. Edit one (keep it 8x8 and\n"
+                       "palette-indexed: the colours are the game's palette, index 0 is transparent)\n"
+                       "and put it in this folder under the same name. It is drawn instead of the\n"
+                       "original wherever the game uses that tile.\n",
+                       f);
+            std::fclose(f);
+        }
+    }
+    auto tiles = std::make_shared<TileReplacer>();
+    std::vector<std::string> messages;
+    const int n = load_tile_pack(*tiles, dir, &messages);
+    for (const auto& m : messages) LOGW("tiles", "%s", m.c_str());
+    if (n) LOGI("tiles", "%d tile replacement(s) from %s", n, dir.c_str());
+    tiles->dumping = app.cfg.dump_tiles;
+    app.tiles_dir = dir;
+    app.tiles = tiles;
+    app.m->vdp.tiles = tiles;
+}
+
 // Music and touch images from the Mods folder; again when that folder has
 // changed (Android: shared storage access granted while the app was away).
 void load_mods(App& app) {
@@ -692,6 +726,7 @@ void load_mods(App& app) {
     if (const int n = app.music.scan(music_dir)) LOGI("music", "%d piece(s) of music replaced from %s", n, music_dir.c_str());
     app.music.attach(*app.m);
     load_touch_skin(app, mods + "Touch");
+    load_tiles(app);
     LOGI("app", "mods folder: %s", mods.c_str());
 }
 
@@ -1338,6 +1373,11 @@ int main(int argc, char** argv) {
             ++steps;
         }
         if (app.fast_forward) accumulator = 0;
+        if (app.m->vdp.tiles != app.tiles) app.m->vdp.tiles = app.tiles;
+        if (TileReplacer* t = app.tiles.get()) {
+            t->dumping = app.cfg.dump_tiles;
+            if (const int n = write_tile_dumps(*t, app.tiles_dir + "/Dump")) LOGI("tiles", "%d tile(s) dumped", n);
+        }
         uint64_t emu_t1 = SDL_GetPerformanceCounter();
         if (steps) app.timing.emu_ms = double(emu_t1 - emu_t0) * 1000.0 / double(freq) / steps;
         fps_sims += uint64_t(steps);

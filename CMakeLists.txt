@@ -41,6 +41,7 @@ add_library(chaotix_runtime STATIC
     src/runtime/sh2_bus.cpp
     src/runtime/sh2_onchip.cpp
     src/runtime/vdp.cpp
+    src/runtime/tile_replace.cpp
     src/renderer/compositor.cpp
     src/runtime/save.cpp
     src/audio/ym2612.cpp
@@ -48,6 +49,7 @@ add_library(chaotix_runtime STATIC
     src/audio/music_mods.cpp
     src/audio/volumes.cpp
     src/renderer/image_io.cpp
+    src/renderer/tile_pack.cpp
     src/renderer/viewport.cpp
     src/frontend/setup.cpp
     src/frontend/time_attack.cpp

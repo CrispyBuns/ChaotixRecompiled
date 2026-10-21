@@ -34,6 +34,19 @@ std::unordered_map<uint64_t, uint64_t> g_fallback;
 Machine* g_m = nullptr;
 bool g_installed = false;
 
+// Outside the generated-code block: the interpreter reads SH-2 code through
+// it too, so an interpreter-only build needs it as well.
+const uint8_t* sh2_host_ptr(int cpu, uint32_t addr) {
+    uint32_t area = addr >> 29;
+    if (area <= 1) {
+        uint32_t p = addr & 0x1FFFFFFF;
+        if (p >= 0x06000000 && p < 0x08000000) return g_m->sdram + (p & 0x3FFFF);
+        return nullptr;
+    }
+    if (area == 6) return g_m->onchip[cpu].cache_data + (addr & 0xFFF);
+    return nullptr;
+}
+
 #if CHAOTIX_HAVE_GENERATED
 
 std::unordered_map<uint32_t, recomp::M68kFn> g_m68k_map;
@@ -58,16 +71,6 @@ inline recomp::M68kFn lookup_m68k(const m68k::State* c) {
     return it == g_m68k_map.end() ? nullptr : it->second;
 }
 
-const uint8_t* sh2_host_ptr(int cpu, uint32_t addr) {
-    uint32_t area = addr >> 29;
-    if (area <= 1) {
-        uint32_t p = addr & 0x1FFFFFFF;
-        if (p >= 0x06000000 && p < 0x08000000) return g_m->sdram + (p & 0x3FFFF);
-        return nullptr;
-    }
-    if (area == 6) return g_m->onchip[cpu].cache_data + (addr & 0xFFF);
-    return nullptr;
-}
 
 bool sh2_validate(Sh2FnState& s, int cpu) {
     if (s.range_count == 0) return true;

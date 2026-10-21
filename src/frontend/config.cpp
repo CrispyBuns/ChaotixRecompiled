@@ -94,6 +94,8 @@ bool Config::load(const std::string& path) {
             } else if (k == "Codes") cheat_codes = v;
         } else if (section == "Achievements") {
             if (k == "Enabled") achievements = parse_bool(v, achievements);
+        } else if (section == "Mods") {
+            if (k == "DumpTiles") dump_tiles = parse_bool(v, dump_tiles);
         } else if (section == "Audio") {
             if (k == "Enabled") audio = parse_bool(v, audio);
             else if (k == "Volume") volume = std::clamp(std::atoi(v.c_str()), 0, 100);
@@ -165,6 +167,8 @@ bool Config::save(const std::string& path) const {
     std::fprintf(f, "Enabled = %s\nCodes = %s\n\n", enabled.c_str(), cheat_codes.c_str());
     std::fprintf(f, "[Achievements]\n# Local achievements from assets/achievements.ini (nothing leaves this machine)\n");
     std::fprintf(f, "Enabled = %s\n\n", achievements ? "true" : "false");
+    std::fprintf(f, "[Mods]\n# Write each Mega Drive tile the game draws to Mods/Textures/Dump, for tile replacements\n");
+    std::fprintf(f, "DumpTiles = %s\n\n", dump_tiles ? "true" : "false");
     std::fprintf(f, "[Input]\n# Auto | On | Off\nTouchControls = %s\n", touch == TouchMode::On ? "On" : touch == TouchMode::Off ? "Off" : "Auto");
     std::fprintf(f, "SixButtonPad = %s\n", six_button ? "true" : "false");
     std::fprintf(f, "# The touch directions as a joystick instead of a d-pad\nTouchStick = %s\n", touch_stick ? "true" : "false");

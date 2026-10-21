@@ -1,4 +1,5 @@
 #include "vdp.h"
+#include "tile_replace.h"
 #include "patches.h"
 #include "log.h"
 #include <cstring>
@@ -266,14 +267,19 @@ void render_plane(const Vdp& v, int line, bool planeA, LinePix* out, int xs, int
         uint16_t e = uint16_t((v.vram[ea & 0xFFFF] << 8) | v.vram[(ea + 1) & 0xFFFF]);
         int ty = py & 7;
         if (e & 0x1000) ty = 7 - ty;
-        uint32_t row = ((uint32_t(e) & 0x7FF) << 5) + uint32_t(ty) * 4;
-        uint8_t pix[8];
-        for (int k = 0; k < 4; ++k) {
-            uint8_t b = v.vram[(row + uint32_t(k)) & 0xFFFF];
-            pix[k * 2] = b >> 4;
-            pix[k * 2 + 1] = b & 15;
-        }
         const uint8_t pal = uint8_t((e >> 9) & 0x30), prio = uint8_t((e >> 15) & 1);
+        uint8_t pix[8];
+        if (const uint8_t* rp = v.tiles ? v.tiles->slot(e) : nullptr) {
+            for (int k = 0; k < 8; ++k) pix[k] = rp[ty * 8 + k];
+        } else {
+            uint32_t row = ((uint32_t(e) & 0x7FF) << 5) + uint32_t(ty) * 4;
+            for (int k = 0; k < 4; ++k) {
+                uint8_t b = v.vram[(row + uint32_t(k)) & 0xFFFF];
+                pix[k * 2] = b >> 4;
+                pix[k * 2 + 1] = b & 15;
+            }
+        }
+        if (v.tiles) v.tiles->used(e, pal >> 4);
         const bool hflip = (e & 0x0800) != 0;
         for (int i = 0; i < run; ++i) {
             int tx = (px & 7) + i;
@@ -296,7 +302,9 @@ void render_window(const Vdp& v, int line, LinePix* out, int xs, int x0, int x1)
         int tx = x & 7, yy = ty;
         if (e & 0x0800) tx = 7 - tx;
         if (e & 0x1000) yy = 7 - yy;
-        uint8_t c = tile_pixel(v.vram, e, tx, yy);
+        const uint8_t* rp = v.tiles ? v.tiles->slot(e) : nullptr;
+        uint8_t c = rp ? rp[yy * 8 + tx] : tile_pixel(v.vram, e, tx, yy);
+        if (v.tiles) v.tiles->used(e, (e >> 13) & 3);
         out[x - xs].color = c ? uint8_t(((e >> 9) & 0x30) | c) : 0;
         out[x - xs].prio = (e >> 15) & 1;
     }
@@ -312,6 +320,12 @@ void Vdp::render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra) {
     if (!display_enabled()) {
         for (int x = 0; x < n; ++x) { out_rgb[x] = bg; out_bg[x] = 1; }
         return;
+    }
+
+    if (tiles && tiles->active() && line == 0) {
+        uint32_t argb[64];
+        for (int i = 0; i < 64; ++i) argb[i] = cram_to_rgb(cram[i]) | 0xFF000000u;
+        tiles->refresh(vram, argb);
     }
 
     LinePix a[kMaxWidth], b[kMaxWidth], s[kMaxWidth];
@@ -354,6 +368,11 @@ void Vdp::render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra) {
         bool nonzero_x_seen = false, masked = false;
         uint8_t filled[kMaxWidth] = {};
         uint8_t hidden_only[kMaxWidth] = {};  // filled by a hidden sprite alone
+        // With replaced tiles (issue #35) the collision flag still follows the
+        // original pixels, so the game sees exactly what it would have; this
+        // tracks them apart from what is drawn.
+        uint8_t solid[kMaxWidth] = {};
+        const bool replacing = tiles && tiles->size();
         while (count < max_sprites) {
             uint32_t e = sat + uint32_t(link) * 8;
             auto rw = [&](uint32_t o) { return uint16_t((vram[(e + o) & 0xFFFF] << 8) | vram[(e + o + 1) & 0xFFFF]); };
@@ -389,10 +408,18 @@ void Vdp::render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra) {
                     int col = (pat & 0x0800) ? (hs * 8 - 1 - cx) : cx;
                     uint32_t tile = (pat & 0x7FF) + uint32_t((col >> 3) * vsz + (row >> 3));
                     uint8_t c = tile_pixel(vram, tile, col & 7, row & 7);
-                    if (!c) continue;
                     const int i = x - xs;
+                    if (tiles) tiles->used(tile, (pat >> 13) & 3);
+                    if (replacing) {
+                        if (c) {
+                            if (solid[i] && x >= 0 && x < width) sprite_collision = true;
+                            solid[i] = 1;
+                        }
+                        if (const uint8_t* rp = tiles->slot(tile)) c = rp[(row & 7) * 8 + (col & 7)];
+                    }
+                    if (!c) continue;
                     if (filled[i]) {
-                        if (x >= 0 && x < width) sprite_collision = true;
+                        if (!replacing && x >= 0 && x < width) sprite_collision = true;
                         // A hidden sprite still collides, but does not cover what is behind it.
                         if (!hidden_only[i] || hidden) continue;
                         hidden_only[i] = 0;

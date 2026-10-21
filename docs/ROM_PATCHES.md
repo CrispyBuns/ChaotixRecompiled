@@ -46,13 +46,10 @@ matters on a slow device.
 
 ## Not done
 
-- Loose image files (PNG sprite sheets) in place of the ROM's graphics, as
-  the issue describes. Most of the graphics are in the ROM in the game's own
-  formats, and much of what you see is drawn by the SH-2 into the frame
-  buffer rather than uploaded as tiles, so there is no single place to swap
-  an image in. Editing them with a ROM hacking tool and shipping the result as
-  a patch works today.
 - Patches for other ROMs (the Japanese prototype, other regions).
+
+For replacing graphics with image files instead, see
+[TEXTURE_MODS.md](TEXTURE_MODS.md).
 
 ## Validation
 

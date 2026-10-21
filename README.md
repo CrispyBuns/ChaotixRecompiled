@@ -258,6 +258,14 @@ without rebuilding, and without changing your ROM file. A patch that changes
 the game's code works too; that code then runs in the interpreter. Details:
 [docs/ROM_PATCHES.md](docs/ROM_PATCHES.md).
 
+## Tile replacement
+
+The Mega Drive layer's tiles (backgrounds and level art) can be replaced
+with PNG files: OPTIONS > EXTRAS > DUMP TILES saves each tile the game draws
+to `Mods/Textures/Dump`; an edited copy in `Mods/Textures` is drawn instead,
+in the game's palette, wherever the game uses that tile. Details, and what
+the 32X layer draws instead: [docs/TEXTURE_MODS.md](docs/TEXTURE_MODS.md).
+
 ## Music replacement
 
 Put WAV files in `Mods/Music` (see above for where `Mods` is),

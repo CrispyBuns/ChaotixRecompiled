@@ -17,6 +17,8 @@ add_executable(chaotix_tests
     test_cheats.cpp
     test_volumes.cpp
     test_rom_patch.cpp
+    test_tile_replace.cpp
+    test_image_io.cpp
 )
 target_link_libraries(chaotix_tests PRIVATE chaotix_game chaotix_runtime)
 
@@ -58,6 +60,11 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_rom_patches.py"
                     $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}" "${CHAOTIX_GENERATED_DIR}/recomp_tables.cpp")
         set_tests_properties(rom_patches PROPERTIES TIMEOUT 900)
+        # Mega Drive tile replacement: the level's own tiles as a pack change nothing.
+        add_test(NAME tile_pack
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_tile_pack.py"
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
+        set_tests_properties(tile_pack PROPERTIES TIMEOUT 900)
     endif()
     # Boot -> title -> menus -> DATA LOAD -> level, with gameplay input.
     set(_script

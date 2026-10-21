@@ -2,9 +2,12 @@
 // interrupts and a scanline renderer producing RGB + "backdrop" info that the
 // compositor merges with the 32X layer.
 #pragma once
+#include <memory>
 #include <cstdint>
 
 namespace chaotix {
+
+class TileReplacer;
 
 struct VdpHost {
     void* user = nullptr;
@@ -20,6 +23,8 @@ public:
     static constexpr int kMaxWidth = 320 + 2 * kMaxExtra;
 
     uint8_t vram[0x10000];
+    // Modders' tiles (issue #35), shared by copies of the machine; output only.
+    std::shared_ptr<TileReplacer> tiles;
     uint16_t cram[64];
     uint16_t vsram[40];
     uint8_t reg[32];
