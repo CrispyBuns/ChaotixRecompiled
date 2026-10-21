@@ -112,6 +112,21 @@ bool Machine::fb_in_picture(uint32_t o) {
 
 void Machine::fb_write_special(uint8_t* fb, uint32_t off, uint32_t v, int size, bool overwrite) {
     uint8_t* shadow = fb_margin[mars.fb_display ^ 1];
+
+    // Byte writes are common in the SH-2 framebuffer path. Handle them without
+    // the general multi-byte loop while keeping the same special-stage rules.
+    if (size == 1) {
+        const uint8_t b = uint8_t(v);
+        if (overwrite && !b) return;
+        if (!fb_in_picture(off)) {
+            fb[off] = b;
+            return;
+        }
+        const uint32_t o = (off - (overwrite ? 0u : uint32_t(special_shift))) & 0x1FFFF;
+        (fb_in_margin(o) ? shadow : fb)[o] = b;
+        return;
+    }
+
     for (int i = 0; i < size; ++i) {
         const uint8_t b = uint8_t(v >> (8 * (size - 1 - i)));
         if (overwrite && !b) continue;  // overwrite image: zero bytes are transparent
