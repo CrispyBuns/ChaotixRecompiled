@@ -13,6 +13,7 @@
 // drawn with, for modders to edit (the frontend writes them as PNG files).
 #pragma once
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
