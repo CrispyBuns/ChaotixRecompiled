@@ -104,6 +104,8 @@ bool Config::load(const std::string& path) {
             if (k == "TouchControls") touch = v == "On" ? TouchMode::On : v == "Off" ? TouchMode::Off : TouchMode::Auto;
             else if (k == "SixButtonPad") six_button = parse_bool(v, six_button);
             else if (k == "TouchStick") touch_stick = parse_bool(v, touch_stick);
+            else if (k == "TouchOpacity") touch_opacity = std::clamp(std::atoi(v.c_str()), 0, 100);
+            else if (k == "TouchPressedOpacity") touch_pressed_opacity = std::clamp(std::atoi(v.c_str()), 0, 100);
             else if (k == "Device1") device[0] = v;
             else if (k == "Device2") device[1] = v;
             else if (k == "MenuButton") menu_button = v;
@@ -165,6 +167,8 @@ bool Config::save(const std::string& path) const {
     std::fprintf(f, "[Input]\n# Auto | On | Off\nTouchControls = %s\n", touch == TouchMode::On ? "On" : touch == TouchMode::Off ? "Off" : "Auto");
     std::fprintf(f, "SixButtonPad = %s\n", six_button ? "true" : "false");
     std::fprintf(f, "# The touch directions as a joystick instead of a d-pad\nTouchStick = %s\n", touch_stick ? "true" : "false");
+    std::fprintf(f, "# How opaque the touch controls are, percent: at rest, and held\nTouchOpacity = %d\nTouchPressedOpacity = %d\n",
+                 touch_opacity, touch_pressed_opacity);
     std::fprintf(f, "# Who drives each player: keyboard | pad1..padN | none\n");
     std::fprintf(f, "Device1 = %s\nDevice2 = %s\n", device[0].c_str(), device[1].c_str());
     std::fprintf(f, "# Gamepad button that opens this menu (the emulated pad uses every other one):\n");

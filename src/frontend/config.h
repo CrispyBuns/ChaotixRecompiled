@@ -45,6 +45,8 @@ struct Config {
     TouchMode touch = TouchMode::Auto;
     bool six_button = true;
     bool touch_stick = false;  // the touch directions as a joystick (issue #30)
+    int touch_opacity = 65;           // touch controls at rest, percent (issue #33)
+    int touch_pressed_opacity = 100;  // and held
     // What drives each player: "auto" (the keyboard and every gamepad the
     // other player has not claimed), "keyboard", "pad1".."padN", or "none".
     std::string device[2] = {"auto", "none"};

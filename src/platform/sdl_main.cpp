@@ -708,6 +708,13 @@ SDL_Texture* touch_image(const App& app, const TouchButton& b, bool on) {
     return nullptr;
 }
 
+// How opaque a touch control is drawn (issue #33): OPTIONS > INPUT sets it
+// for buttons at rest and held, as a percentage of `full`.
+Uint8 touch_alpha(const App& app, bool held, int full) {
+    const int pct = std::clamp(held ? app.cfg.touch_pressed_opacity : app.cfg.touch_opacity, 0, 100);
+    return Uint8(full * pct / 100);
+}
+
 void fill_circle(SDL_Renderer* r, float cx, float cy, float radius, SDL_FColor c) {
     constexpr int kSteps = 32;
     SDL_Vertex v[kSteps + 1];
@@ -735,18 +742,18 @@ void draw_touch_stick(App& app, const TouchButton& b) {
     const float kx = b.cx + app.touch.knob_dx(), ky = b.cy + app.touch.knob_dy();
     const float kr = b.r * 0.45f;
     if (SDL_Texture* img = image("stick")) {
-        SDL_SetTextureAlphaMod(img, on ? 255 : 170);
+        SDL_SetTextureAlphaMod(img, touch_alpha(app, on, 255));
         const SDL_FRect dst{b.cx - b.r, b.cy - b.r, b.r * 2, b.r * 2};
         SDL_RenderTexture(app.renderer, img, nullptr, &dst);
     } else {
-        fill_circle(app.renderer, b.cx, b.cy, b.r, {1, 1, 1, on ? 0.25f : 0.14f});
+        fill_circle(app.renderer, b.cx, b.cy, b.r, {1, 1, 1, touch_alpha(app, on, 64) / 255.0f});
     }
     if (SDL_Texture* img = image("knob")) {
-        SDL_SetTextureAlphaMod(img, on ? 255 : 170);
+        SDL_SetTextureAlphaMod(img, touch_alpha(app, on, 255));
         const SDL_FRect dst{kx - kr, ky - kr, kr * 2, kr * 2};
         SDL_RenderTexture(app.renderer, img, nullptr, &dst);
     } else {
-        fill_circle(app.renderer, kx, ky, kr, {1, 1, 1, on ? 0.55f : 0.32f});
+        fill_circle(app.renderer, kx, ky, kr, {1, 1, 1, touch_alpha(app, on, 140) / 255.0f});
     }
 }
 
@@ -760,12 +767,12 @@ void draw_touch_controls(App& app, uint16_t held) {
         bool on = b.is_dpad ? (held & (PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT)) != 0 : (held & b.mask) != 0;
         if (SDL_Texture* img = touch_image(app, b, on)) {
             // Without a pressed image, a held button is drawn brighter.
-            SDL_SetTextureAlphaMod(img, on ? 255 : 170);
+            SDL_SetTextureAlphaMod(img, touch_alpha(app, on, 255));
             const SDL_FRect dst{b.cx - b.r, b.cy - b.r, b.r * 2, b.r * 2};
             SDL_RenderTexture(app.renderer, img, nullptr, &dst);
             continue;
         }
-        SDL_SetRenderDrawColor(app.renderer, 255, 255, 255, on ? 110 : 55);
+        SDL_SetRenderDrawColor(app.renderer, 255, 255, 255, touch_alpha(app, on, 110));
         // Approximate circles with a filled square plus cross for the d-pad.
         SDL_FRect r{b.cx - b.r * 0.7f, b.cy - b.r * 0.7f, b.r * 1.4f, b.r * 1.4f};
         if (b.is_dpad) {
@@ -775,7 +782,7 @@ void draw_touch_controls(App& app, uint16_t held) {
             SDL_RenderFillRect(app.renderer, &v);
         } else {
             SDL_RenderFillRect(app.renderer, &r);
-            SDL_SetRenderDrawColor(app.renderer, 0, 0, 0, 200);
+            SDL_SetRenderDrawColor(app.renderer, 0, 0, 0, touch_alpha(app, on, 200));
             SDL_RenderDebugText(app.renderer, b.cx - 4.0f * float(SDL_strlen(b.label)), b.cy - 4, b.label);
         }
     }

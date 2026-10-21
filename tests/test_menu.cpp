@@ -4,6 +4,7 @@
 #include "platform/menu.h"
 
 #include <cctype>
+#include <cstdio>
 
 #include "frontend/config.h"
 #include "game/achievements.h"
@@ -729,4 +730,32 @@ TEST(menu, text_lands_on_whole_pixels) {
     const auto whole = grab(100.0f, 100.0f);
     CHECK(!whole.empty());
     CHECK(grab(100.4f, 100.3f) == whole);
+}
+
+TEST(menu, touch_opacity_is_set_and_kept) {
+    // Issue #33: how opaque the touch controls are, at rest and held.
+    Config cfg;
+    cfg.set_defaults();
+    Menu m;
+    m.bind(cfg);
+    open_category(m, "INPUT");
+    CHECK(select_row(m, "TOUCH OPACITY"));
+    const int rest = cfg.touch_opacity;
+    CHECK(m.on_key(SDLK_LEFT));
+    CHECK_EQ(cfg.touch_opacity, rest - 5);
+    for (int i = 0; i < 30; ++i) m.on_key(SDLK_LEFT);
+    CHECK_EQ(cfg.touch_opacity, 0);   // the floor
+    CHECK(select_row(m, "PRESSED OPACITY"));
+    CHECK(m.on_key(SDLK_RIGHT));
+    CHECK_EQ(cfg.touch_pressed_opacity, 100);  // already the ceiling
+    CHECK(m.on_key(SDLK_LEFT));
+    CHECK_EQ(cfg.touch_pressed_opacity, 95);
+
+    const std::string path = "touch_opacity_test.ini";
+    CHECK(cfg.save(path));
+    Config back;
+    CHECK(back.load(path));
+    CHECK_EQ(back.touch_opacity, 0);
+    CHECK_EQ(back.touch_pressed_opacity, 95);
+    std::remove(path.c_str());
 }

@@ -446,6 +446,14 @@ void Menu::build_input() {
     items_.push_back({"TOUCH PAD",
                       [c] { return std::string(kTouchNames[int(c->touch)]); },
                       [c](int s) { if (s) cycle(c->touch, 3, s); }});
+    items_.push_back({"TOUCH OPACITY",
+                      [c] { return std::to_string(c->touch_opacity) + "%"; },
+                      [c](int s) { c->touch_opacity = std::clamp(c->touch_opacity + s * 5, 0, 100); },
+                      "the on-screen controls at rest"});
+    items_.push_back({"PRESSED OPACITY",
+                      [c] { return std::to_string(c->touch_pressed_opacity) + "%"; },
+                      [c](int s) { c->touch_pressed_opacity = std::clamp(c->touch_pressed_opacity + s * 5, 0, 100); },
+                      "and while held"});
     items_.push_back({"TOUCH STICK",
                       [c] { return std::string(c->touch_stick ? "JOYSTICK" : "D-PAD"); },
                       [c](int s) { if (s) c->touch_stick = !c->touch_stick; },

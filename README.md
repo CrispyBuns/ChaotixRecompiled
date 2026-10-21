@@ -117,7 +117,7 @@ and dimmed. The art is the game drawing its own title screen, from your ROM,
 so nothing is extracted or shipped.
 
 OPTIONS is split into VIDEO (widescreen, aspect ratio, scaling, screen),
-SOUND (the volumes), INPUT (touch pad, 6-button pad) and EXTRAS (cheats,
+SOUND (the volumes), INPUT (touch controls, 6-button pad) and EXTRAS (cheats,
 awards, and on Android the Mods folder).
 
 START GAME hands the game control, and it proceeds into its own menus exactly
@@ -231,6 +231,10 @@ OPTIONS > INPUT > TOUCH STICK turns the touch d-pad into a joystick
 lifted, and steers even after sliding off the base. Its images are
 `stick.bmp` (the base) and `knob.bmp`, each with an optional `_pressed`
 version.
+
+TOUCH OPACITY and PRESSED OPACITY (OPTIONS > INPUT; `TouchOpacity` and
+`TouchPressedOpacity` in `[Input]`) set how opaque the touch controls are at
+rest and while held, custom images included: 65% and 100% by default.
 
 The `Mods` folder is in the user data folder. On Android it is
 `ChaotixRecompiled/Mods` in the phone's storage once you allow it (OPTIONS >
