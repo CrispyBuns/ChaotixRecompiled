@@ -695,6 +695,42 @@ void load_mods(App& app) {
     LOGI("app", "mods folder: %s", mods.c_str());
 }
 
+// ROM patches (issue #35): IPS and BPS files in Mods/Patches, applied in name
+// order to the ROM in memory before the game starts. The user's ROM file is
+// never changed.
+void apply_rom_patches(App& app) {
+    const std::string dir = mods_root(app) + "Patches";
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
+    const std::string readme = dir + "/README.txt";
+    if (!std::filesystem::exists(std::filesystem::u8path(readme), ec)) {
+        if (FILE* f = std::fopen(readme.c_str(), "w")) {
+            std::fputs("ROM patches. Put .ips or .bps files here; they are applied in name order\n"
+                       "to the ROM in memory when the game starts (your ROM file is not changed).\n"
+                       "Patches must be made for Knuckles' Chaotix (Japan, USA),\n"
+                       "SHA-1 0c2fff7bc79ed26507c08ac47464c3af19f7ced7.\n"
+                       "Graphics, palettes and other data are fine. A patch that changes the game's\n"
+                       "code works too, but that code then runs in the slower interpreter.\n",
+                       f);
+            std::fclose(f);
+        }
+    }
+    std::vector<std::string> files;
+    for (const auto& e : std::filesystem::directory_iterator(std::filesystem::u8path(dir), ec)) {
+        std::string ext = e.path().extension().u8string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) { return char(std::tolower(ch)); });
+        if (e.is_regular_file(ec) && (ext == ".ips" || ext == ".bps")) files.push_back(e.path().u8string());
+    }
+    if (files.empty()) return;
+    std::sort(files.begin(), files.end());
+    std::vector<std::string> messages;
+    const int applied = app.m->rom.apply_patches(files, &messages);
+    for (const auto& msg : messages) LOGI("patch", "%s", msg.c_str());
+    if (applied)
+        LOGI("patch", "%d patch(es) applied: %zu changed range(s), patched ROM sha1 %s", applied,
+             app.m->rom.patched.size(), app.m->rom.patched_sha1.c_str());
+}
+
 // The image for a button, if the skin has one.
 SDL_Texture* touch_image(const App& app, const TouchButton& b, bool on) {
     std::string name = b.is_dpad ? "dpad" : b.label;
@@ -1072,6 +1108,7 @@ int main(int argc, char** argv) {
     app.m->input.six_button[0] = app.cfg.six_button;
     app.m->input.six_button[1] = app.cfg.six_button;
     warn_about_dead_bindings(app);
+    if (!app.autotest_frames || !app.mods_dir.empty()) apply_rom_patches(app);  // autotests are hermetic unless asked
     app.m->reset();
     if (!app.autotest_frames) app.store.load_sram(*app.m);  // autotests are hermetic
     RecompStatus rs = install_recompiled_code(*app.m, app.cfg.use_recompiled && !force_interp);

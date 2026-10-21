@@ -1,4 +1,7 @@
 #include "rom.h"
+#include "rom_patch.h"
+#include <fstream>
+#include <iterator>
 #include <cstdio>
 #include <cstring>
 
@@ -131,6 +134,57 @@ uint16_t Rom::compute_checksum() const {
     uint16_t sum = 0;
     for (size_t i = 0x200; i + 1 < file_size; i += 2) sum = uint16_t(sum + read16(uint32_t(i)));
     return sum;
+}
+
+int Rom::apply_patches(const std::vector<std::string>& paths, std::vector<std::string>* messages) {
+    auto say = [messages](std::string m) { if (messages) messages->push_back(std::move(m)); };
+    const std::vector<uint8_t>& base = unpatched();
+    std::vector<uint8_t> file(base.begin(), base.begin() + long(file_size));
+    std::vector<uint8_t> image = file;
+    int applied = 0;
+    for (const auto& path : paths) {
+        std::ifstream f(path, std::ios::binary);
+        if (!f) { say("skipped " + path + ": cannot read it"); continue; }
+        const std::vector<uint8_t> patch((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        std::string err;
+        if (rom_patch::apply(image, patch.data(), patch.size(), &err)) {
+            ++applied;
+            say("applied " + path);
+        } else {
+            say("skipped " + path + ": " + err);
+        }
+    }
+    if (!applied) return 0;
+    // The game checks the header checksum as it boots and stops at a blank
+    // screen if it is wrong. Patches made from a hacked ROM carry the fixed
+    // checksum; hand-made ones often do not, so it is fixed here -- if the
+    // ROM's own was right to begin with.
+    auto checksum = [](const std::vector<uint8_t>& b) {
+        uint16_t sum = 0;
+        for (size_t i = 0x200; i + 1 < b.size(); i += 2) sum = uint16_t(sum + (b[i] << 8 | b[i + 1]));
+        return sum;
+    };
+    if (image.size() >= 0x200 && checksum(file) == header_checksum) {
+        const uint16_t sum = checksum(image);
+        if ((image[0x18E] << 8 | image[0x18F]) != sum) {
+            image[0x18E] = uint8_t(sum >> 8);
+            image[0x18F] = uint8_t(sum);
+            say("header checksum updated for the patched ROM");
+        }
+    }
+    Rom r;
+    std::string err;
+    if (!r.load_memory(image.data(), image.size(), &err)) {
+        say("patched ROM rejected (" + err + "); using the ROM as it is");
+        return 0;
+    }
+    r.original = base;
+    r.patched = rom_patch::changed_ranges(file, image);
+    r.patched_sha1 = r.sha1;
+    r.sha1 = sha1;
+    r.version = version;
+    *this = std::move(r);
+    return applied;
 }
 
 } // namespace chaotix

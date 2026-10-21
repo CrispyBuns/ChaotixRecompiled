@@ -35,10 +35,11 @@ people below. Thank you all: every report here led to a fix or a feature.
 - **[SegaSaturnFan](https://github.com/SegaSaturnFan)**: widescreen dropping to
   4:3 ([#7](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/7)).
 - **[datadrivezz](https://github.com/datadrivezz)**: the touch menus,
-  touch control opacity and suggestions for the mobile build
+  touch control opacity, ROM patches and suggestions for the mobile build
   ([#8](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/8),
   [#9](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/9),
-  [#33](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/33)).
+  [#33](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/33),
+  [#35](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/35)).
 - **[mechasalesman](https://github.com/mechasalesman)**: widescreen in the
   lobby, and cheats ([#13](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/13),
   [#20](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/20)).

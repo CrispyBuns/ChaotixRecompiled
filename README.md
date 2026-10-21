@@ -250,6 +250,14 @@ EXTRAS > MODS FOLDER opens Android's "All files access" page), and
 In widescreen levels the HUD keeps to the left edge of the picture; OPTIONS >
 VIDEO > WIDE HUD puts it back at its 4:3 place.
 
+## ROM patches
+
+`.ips` and `.bps` files in `Mods/Patches` are applied, in name order, to the
+ROM in memory as the game starts: graphics, palettes and other ROM hacks
+without rebuilding, and without changing your ROM file. A patch that changes
+the game's code works too; that code then runs in the interpreter. Details:
+[docs/ROM_PATCHES.md](docs/ROM_PATCHES.md).
+
 ## Music replacement
 
 Put WAV files in `Mods/Music` (see above for where `Mods` is),

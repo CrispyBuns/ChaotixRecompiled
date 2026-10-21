@@ -32,6 +32,12 @@ struct CodeRange {
     uint32_t rom_off;  // expected contents come from this ROM offset
 };
 
+// ROM bytes the generated code relies on without checking them (code run
+// from ROM, SH-2 literals folded from it). cpu: 0 = 68K, 1 = SH-2.
+struct RomCode {
+    uint32_t cpu, rom_off, len;
+};
+
 struct Sh2Entry {
     uint32_t pc;
     Sh2Fn fn;
@@ -88,6 +94,8 @@ extern const size_t g_sh2_entry_count;
 extern const CodeRange g_sh2_ranges[];
 extern const size_t g_sh2_range_count;
 extern const char g_rom_sha1[];
+extern const RomCode g_rom_code[];
+extern const size_t g_rom_code_count;
 
 } // namespace recomp
 

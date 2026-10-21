@@ -43,6 +43,7 @@ struct FnCtx {
     std::vector<std::pair<uint32_t, uint32_t>> ranges;  // validation ranges (addr, len)
     std::set<uint32_t> unchecked;  // bytes left out of them: patched immediates
     bool smc = false;              // in SDRAM: watch for its own code changing
+    std::vector<std::pair<uint32_t, uint32_t>> rom_code;  // see EmitResult::rom_code
     size_t folded = 0;
     size_t fast_loops = 0;
     Out o;
@@ -105,6 +106,7 @@ void emit_simple(FnCtx& x, const sh2::Insn& in, const char* indent) {
             if (ok) {
                 x.o.f("%sc->r[%u] = 0x%08Xu;  // literal @%08X\n", indent, in.n, v, in.addr);
                 if (x.p.spaces[size_t(sp)].ram) x.ranges.push_back({in.addr, in.op == sh2::Op::MOVL_PC ? 4u : 2u});
+                else x.rom_code.push_back({x.p.spaces[size_t(sp)].to_rom(in.addr), in.op == sh2::Op::MOVL_PC ? 4u : 2u});
                 ++x.folded;
                 return;
             }
@@ -313,7 +315,7 @@ void emit_sh2(const Program& p, const EmitOptions& opt, EmitResult& out) {
         for (size_t i = start; i < fkeys.size() && i < start + per_file; ++i) {
             const Function& f = p.functions.at(fkeys[i]);
             bool ram = f.space >= 0 && p.spaces[size_t(f.space)].ram;
-            FnCtx x{p, f, std::set<uint64_t>(f.blocks.begin(), f.blocks.end()), ram, {}, {}, false, 0, 0, {}};
+            FnCtx x{p, f, std::set<uint64_t>(f.blocks.begin(), f.blocks.end()), ram, {}, {}, false, {}, 0, 0, {}};
             x.o.f("int %s(sh2::State* c) {\n", fn_name(Cpu::SH2, f.entry).c_str());
             // Self-modifying code (the special stage rewrites immediates in
             // its own routines, e.g. the ADD at $06005A64): native code was
@@ -330,6 +332,8 @@ void emit_sh2(const Program& p, const EmitOptions& opt, EmitResult& out) {
             for (uint64_t bk : f.blocks) {
                 const Block& b = p.blocks.at(bk);
                 if (ram) x.ranges.push_back({b.start, b.end - b.start});
+                else if (f.space >= 0 && b.end > b.start)
+                    x.rom_code.push_back({p.spaces[size_t(f.space)].to_rom(b.start), b.end - b.start});
                 x.o.f("%s:\n", label(b.start).c_str());
                 const SelfLoop loop = analyze_self_loop(p, b);
                 if (loop.kind == SelfLoop::DELAY) {
@@ -368,6 +372,7 @@ void emit_sh2(const Program& p, const EmitOptions& opt, EmitResult& out) {
             }
             x.o.f("}\n\n");
             body += x.o.s;
+            out.rom_code.insert(out.rom_code.end(), x.rom_code.begin(), x.rom_code.end());
             out.folded_literals += x.folded;
             out.fast_loops += x.fast_loops;
             ++out.functions;

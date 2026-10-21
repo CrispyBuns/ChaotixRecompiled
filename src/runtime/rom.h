@@ -3,6 +3,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace chaotix {
@@ -30,8 +31,21 @@ struct Rom {
     uint16_t header_checksum = 0;
     char domestic_name[49] = {};
 
+    // After patches (issue #35, runtime/rom_patch.h): `data` is the patched
+    // image, while `sha1` and `version` stay the user's ROM's, since that is
+    // what the recompiled code was built from. `original` is that ROM's image,
+    // for validating recompiled code; `patched` lists the bytes that changed.
+    std::vector<uint8_t> original;
+    std::vector<std::pair<uint32_t, uint32_t>> patched;
+    std::string patched_sha1;
+
     bool load(const std::string& path, std::string* error);
     bool load_memory(const uint8_t* bytes, size_t n, std::string* error);
+    // Applies the patch files in this order; one that fails is skipped and
+    // said so in `messages`. Returns how many were applied.
+    int apply_patches(const std::vector<std::string>& paths, std::vector<std::string>* messages);
+    // The image the recompiled code was made from.
+    const std::vector<uint8_t>& unpatched() const { return original.empty() ? data : original; }
     uint16_t compute_checksum() const;  // Mega Drive style (sum of words from 0x200)
     uint32_t read32(uint32_t off) const {
         return (uint32_t(data[off]) << 24) | (uint32_t(data[off + 1]) << 16) | (uint32_t(data[off + 2]) << 8) | data[off + 3];

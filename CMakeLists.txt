@@ -33,6 +33,7 @@ chaotix_set_warnings(chaotix_cpu)
 add_library(chaotix_runtime STATIC
     src/runtime/log.cpp
     src/runtime/rom.cpp
+    src/runtime/rom_patch.cpp
     src/runtime/system.cpp
     src/runtime/patches.cpp
     src/runtime/stage_select.cpp

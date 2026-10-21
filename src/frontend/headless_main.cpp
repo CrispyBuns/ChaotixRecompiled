@@ -179,6 +179,7 @@ int main(int argc, char** argv) {
     bool trace_wide = false;
     bool wide_everywhere = false;  // also widen the scenes kept 4:3
     bool hud_edges = false;        // the HUD at the widened picture's edge
+    std::vector<std::string> patch_files;  // --patch FILE: IPS/BPS applied to the ROM in memory
     std::vector<cheats::Write> cheat_writes;  // --cheat, set before every frame
     uint64_t wide_live_frames = 0;
     int wide_stretches = 0;
@@ -287,6 +288,7 @@ int main(int argc, char** argv) {
         else if (a == "--trace-wide") trace_wide = true;
         else if (a == "--wide-everywhere") wide_everywhere = true;
         else if (a == "--hud-edges") hud_edges = true;
+        else if (a == "--patch") patch_files.push_back(next());
         else if (a == "--cheat") {
             // A built-in cheat by its key, or Action Replay codes.
             const std::string c = next();
@@ -396,6 +398,12 @@ int main(int argc, char** argv) {
     auto m = std::make_unique<Machine>();
     std::string err;
     if (!m->load_rom(rom_path, &err)) { std::fprintf(stderr, "error: %s\n", err.c_str()); return 1; }
+    if (!patch_files.empty()) {
+        std::vector<std::string> messages;
+        const int applied = m->rom.apply_patches(patch_files, &messages);
+        for (const auto& msg : messages) std::printf("patch: %s\n", msg.c_str());
+        std::printf("patch: %d applied, %zu changed range(s)\n", applied, m->rom.patched.size());
+    }
     m->reset();
     m->audio_enabled = !wav_path.empty() || want_audio;
     m->profile = profile;
@@ -426,6 +434,7 @@ int main(int argc, char** argv) {
     if (lockstep) {
         ref = std::make_unique<Machine>();
         ref->load_rom(rom_path, &err);
+        if (!patch_files.empty()) ref->rom.apply_patches(patch_files, nullptr);
         ref->reset();
         ref->wide_enabled = wide > 0 || wide_bottom > 0 || wide_at > 0 || wide_at_bottom > 0;
         ref->wide_extra = wide;
@@ -450,6 +459,7 @@ int main(int argc, char** argv) {
     if (compare_native && (wide > 0 || wide_bottom > 0)) {
         nat = std::make_unique<Machine>();
         nat->load_rom(rom_path, &err);
+        if (!patch_files.empty()) nat->rom.apply_patches(patch_files, nullptr);
         nat->reset();
         centre_compare = true;
     }

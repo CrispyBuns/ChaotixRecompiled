@@ -16,6 +16,7 @@ add_executable(chaotix_tests
     test_music_mods.cpp
     test_cheats.cpp
     test_volumes.cpp
+    test_rom_patch.cpp
 )
 target_link_libraries(chaotix_tests PRIVATE chaotix_game chaotix_runtime)
 
@@ -49,6 +50,14 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
                         $<TARGET_FILE:chaotix> "${CHAOTIX_ROM}")
             set_tests_properties(rom_startup PROPERTIES TIMEOUT 180)
         endif()
+    endif()
+    # Issue #35: ROM patches from the Mods folder, over data and over code.
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME rom_patches
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_rom_patches.py"
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}" "${CHAOTIX_GENERATED_DIR}/recomp_tables.cpp")
+        set_tests_properties(rom_patches PROPERTIES TIMEOUT 900)
     endif()
     # Boot -> title -> menus -> DATA LOAD -> level, with gameplay input.
     set(_script

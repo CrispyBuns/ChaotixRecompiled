@@ -79,7 +79,10 @@ bool sh2_validate(Sh2FnState& s, int cpu) {
         const recomp::CodeRange& r = recomp::g_sh2_ranges[s.range_begin + i];
         const uint8_t* host = sh2_host_ptr(cpu, r.addr);
         if (!host) continue;
-        if (r.rom_off + r.len > g_m->rom.data.size() || std::memcmp(host, g_m->rom.data.data() + r.rom_off, r.len) != 0) ok = false;
+        // Against the ROM the code was made from, not a patched one (issue #35):
+        // code a patch changed then runs in the interpreter.
+        const std::vector<uint8_t>& rom = g_m->rom.unpatched();
+        if (r.rom_off + r.len > rom.size() || std::memcmp(host, rom.data() + r.rom_off, r.len) != 0) ok = false;
     }
     if (!ok) ++g_stats.sh2_invalid;
     s.valid[cpu] = ok;
@@ -264,14 +267,24 @@ RecompStatus install_recompiled_code(Machine& m, bool enable) {
         else if (area == 6) m.cache_code_ranges.push_back({r.addr & 0xFFF, (r.addr & 0xFFF) + r.len});
     }
     m.remap_sh2();
-    m.exec.m68k_block = m68k_exec;
+    // A ROM patch over code that runs straight from ROM (or literals folded
+    // from it) would be ignored by the generated code: that CPU interprets.
+    bool patched_code[2] = {false, false};
+    for (const auto& [off, len] : m.rom.patched)
+        for (size_t i = 0; i < recomp::g_rom_code_count; ++i) {
+            const recomp::RomCode& rc = recomp::g_rom_code[i];
+            if (rc.len && off < rc.rom_off + rc.len && rc.rom_off < off + len) patched_code[rc.cpu & 1] = true;
+        }
+    if (!patched_code[0]) m.exec.m68k_block = m68k_exec;
     recomp::g_sdram_code_epoch = &m.sdram_code_epoch;
-    m.exec.sh2_block = sh2_exec;
+    if (!patched_code[1]) m.exec.sh2_block = sh2_exec;
     st.active = true;
     g_installed = true;
-    char buf[256];
-    std::snprintf(buf, sizeof buf, "static recompilation (%zu 68K entry points, %zu SH-2 entry points, %zu SH-2 functions); interpreter fallback for uncovered code",
-                  recomp::g_m68k_entry_count, recomp::g_sh2_entry_count, g_sh2_fns.size());
+    char buf[320];
+    std::snprintf(buf, sizeof buf, "static recompilation (%zu 68K entry points, %zu SH-2 entry points, %zu SH-2 functions); interpreter fallback for uncovered code%s%s",
+                  recomp::g_m68k_entry_count, recomp::g_sh2_entry_count, g_sh2_fns.size(),
+                  patched_code[0] ? "; 68K interpreted (a ROM patch changes its code)" : "",
+                  patched_code[1] ? "; SH-2 interpreted (a ROM patch changes its code)" : "");
     st.description = buf;
 #else
     (void)enable;
