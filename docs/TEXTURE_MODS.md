@@ -14,7 +14,8 @@ layer alone):
 
 **The Mega Drive layer can be replaced now** (below). The 32X layer is drawn
 by the SH-2 in software, straight into its frame buffer; replacing it needs
-the sprite routines to be found first and is not done yet. For both layers,
+the sprite routines to be found first and is not done yet; how that layer is
+drawn, and the plan, are in [SPRITES_32X.md](SPRITES_32X.md). For both layers,
 editing the ROM's graphics with existing tools and shipping a
 [ROM patch](ROM_PATCHES.md) also works.
 
