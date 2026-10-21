@@ -16,6 +16,7 @@
 #include "runtime/log.h"
 #include "renderer/tile_pack.h"
 #include "runtime/patches.h"
+#include "runtime/sprite_record.h"
 #include "runtime/tile_replace.h"
 #include "frontend/time_attack.h"
 #include "runtime/system.h"
@@ -147,6 +148,162 @@ std::string compare_machines(const Machine& a, const Machine& b) {
     return "";
 }
 
+// The interpreter and the recompiled code must call the sprite hooks at the
+// same points with the same registers: their draw lists must be equal.
+std::string compare_sprite_lists(const SpriteList& a, const SpriteList& b) {
+    char buf[512];
+    if (a.draws.size() != b.draws.size()) {
+        std::snprintf(buf, sizeof buf, "%zu draws vs %zu", a.draws.size(), b.draws.size());
+        return buf;
+    }
+    for (size_t i = 0; i < a.draws.size(); ++i) {
+        const SpriteDraw& x = a.draws[i];
+        const SpriteDraw& y = b.draws[i];
+        const bool same = x.graphic == y.graphic && x.source == y.source && x.x == y.x && x.y == y.y && x.flags == y.flags &&
+                          x.sx == y.sx && x.sy == y.sy && x.kind == y.kind && x.warp == y.warp && x.colour == y.colour && x.bank == y.bank &&
+                          x.frame == y.frame && x.hash == y.hash && x.size == y.size &&
+                          std::memcmp(&x.clip, &y.clip, sizeof x.clip) == 0 &&
+                          std::equal(a.bytes(x), a.bytes(x) + x.size, b.bytes(y));
+        if (!same) {
+            std::snprintf(buf, sizeof buf, "draw %zu: %s vs %s", i, describe(x).c_str(), describe(y).c_str());
+            return buf;
+        }
+    }
+    if (a.pool != b.pool) return "the graphics' bytes differ";
+    return "";
+}
+
+// The first byte a sprite self-test picture got wrong, and which draws of the
+// list cover it.
+void report_sprite_mismatch(const Machine& m, const SpriteCheck& r, const SpriteList& list) {
+    const int rel = r.first - 0x200;
+    std::printf("SPRITE MISMATCH frame %llu buffer %d: %llu wrong, %llu missing, %llu extra of %llu; first at offset %05X (line %d, x %d): frame buffer %02X, rebuilt %02X\n",
+                (unsigned long long)m.frame_count, m.mars.fb_display, (unsigned long long)r.wrong,
+                (unsigned long long)r.missing, (unsigned long long)r.extra, (unsigned long long)r.compared, r.first,
+                rel >= 0 ? rel / 512 : -1, rel >= 0 ? rel % 512 : rel, r.first_expected, r.first_rebuilt);
+    std::printf("  offsets (frame buffer/shadow):");
+    for (int o : r.some)
+        std::printf(" %05X=%02X/%02X", o, m.mars.fb[m.mars.fb_display][o], m.fb_margin[m.mars.fb_display][o]);
+    std::printf("\n");
+    SpriteCanvas one;
+    for (size_t k = 0; k < list.draws.size(); ++k) {
+        one.clear();
+        const SpriteDraw& d = list.draws[k];
+        rasterise_sprite(d, list.bytes(d), d.size, one, d.kind == SpriteKind::Warped ? list.pool.data() + d.warp : nullptr);
+        if (one.cov[size_t(r.first)])
+            std::printf("  covered by %zu: %s; clip %d,%d,%d,%d scale %d..%d\n", k, describe(d).c_str(), d.clip.left,
+                        d.clip.right, d.clip.top, d.clip.bottom, d.clip.scale_min, d.clip.scale_max);
+    }
+}
+
+// --sprites-oracle: random calls of the three blitters, each run by the
+// game's own code (the interpreter, on a machine of its own) and drawn by
+// rasterise_sprite; the two must write the same bytes. Graphics with pixels
+// of every value and spans outside their box (the plain blitter trusts the
+// box), flags, hotspots, clip rectangles and scales at random. Spans outside
+// the box are left to the plain blitter: the scaled ones then read their
+// tables out of range, which is undefined (stack contents).
+SpriteCanvas* g_oracle_canvas = nullptr;
+int sprite_oracle(const std::string& rom_path, int calls, uint32_t seed) {
+    auto o = std::make_unique<Machine>();
+    std::string err;
+    if (!o->load_rom(rom_path, &err)) return -1;
+    o->reset();
+    const MarsHeader& h = o->rom.mars;
+    for (uint32_t i = 0; i < h.size; ++i) o->sdram[(h.dest + i) & 0x3FFFF] = o->rom.data[(h.source + i) & (o->rom.data.size() - 1)];
+    o->on_fb_write = [](void*, uint32_t off, uint32_t v, int size, bool overwrite) {
+        for (int i = 0; i < size; ++i) {
+            const uint8_t b = uint8_t(v >> (8 * (size - 1 - i)));
+            if (overwrite && !b) continue;
+            const uint32_t at = (off + uint32_t(i)) & 0x1FFFF;
+            g_oracle_canvas->px[at] = b;
+            g_oracle_canvas->cov[at] = 1;
+        }
+    };
+    auto rnd = [&seed] { seed = seed * 1664525u + 1013904223u; return seed >> 8; };
+    auto rr = [&rnd](int a, int b) { return a + int(rnd() % uint32_t(b - a + 1)); };
+    auto put16 = [](uint8_t* p, uint32_t v) { p[0] = uint8_t(v >> 8); p[1] = uint8_t(v); };
+    auto put32 = [](uint8_t* p, uint32_t v) { p[0] = uint8_t(v >> 24); p[1] = uint8_t(v >> 16); p[2] = uint8_t(v >> 8); p[3] = uint8_t(v); };
+    constexpr uint32_t kGraphic = 0x30000, kParams = 0x31000, kStop = 0x0603E000;
+    SpriteCanvas blitter, raster;
+    int differ = 0;
+    for (int t = 0; t < calls; ++t) {
+        SpriteDraw d;
+        d.kind = SpriteKind(rr(0, 2));
+        std::vector<uint8_t> g;
+        auto p16 = [&g](int v) { g.push_back(uint8_t(uint16_t(v) >> 8)); g.push_back(uint8_t(v)); };
+        const int x0 = -2 * rr(0, 30), x1 = 2 * rr(1, 30), y0 = -rr(0, 30), y1 = rr(1, 30);
+        p16(x0); p16(x1); p16(y0 * 256); p16(y1 * 256);
+        for (int k = rr(1, 12); k > 0; --k) {
+            int xs = 2 * rr(x0 / 2, x1 / 2 - 1), line = rr(y0, y1);
+            int len = 2 * rr(1, (x1 - xs) / 2);
+            if (d.kind == SpriteKind::Plain && rnd() % 16 == 0) { xs += 2 * rr(-10, 10); line += rr(-5, 5); }
+            if (xs + len > 126) len = (126 - xs) & ~1;
+            if (len <= 0) continue;
+            g.push_back(uint8_t(xs)); g.push_back(uint8_t(xs + len)); p16(line * 256);
+            for (int i = 0; i < len; ++i) g.push_back(rnd() % 3 == 0 ? 0 : uint8_t(rr(1, 255)));
+        }
+        g.push_back(0); g.push_back(0); p16(0);
+        std::copy(g.begin(), g.end(), o->sdram + kGraphic);
+        d.x = rr(-80, 400);
+        d.y = rr(-40, 270);
+        d.flags = uint32_t(d.kind == SpriteKind::Plain ? rr(0, 11) : rr(0, 7));
+        const bool wide = rnd() & 1;
+        d.clip.left = int16_t(wide ? -56 : 0);
+        d.clip.right = int16_t(wide ? 376 : 320);
+        d.clip.top = rnd() % 4 ? 0 : rr(0, 100) << 8;
+        d.clip.bottom = (rnd() % 4 ? 223 : rr(100, 239)) << 8;
+        d.clip.scale_min = 0x10;
+        d.clip.scale_max = 0x800;
+        d.sx = rr(0x20, 0x300);
+        d.sy = rnd() % 8 ? rr(0x20, 0x300) : rr(4, 0x20);
+        if (rnd() % 4 == 0) d.sx = d.sy = 0x100;
+        std::vector<uint8_t> warp(kWarpParamBytes + kWarpSineBytes);
+        for (int axis = 0; axis < 2; ++axis) {
+            put16(&warp[size_t(axis * 8)], uint32_t(rr(0x60, 0x200)));
+            put16(&warp[size_t(axis * 8 + 2)], uint32_t(rr(0, 255)));
+            put16(&warp[size_t(axis * 8 + 4)], uint32_t(rr(0, 512)));
+            put16(&warp[size_t(axis * 8 + 6)], uint32_t(rr(0, 0xC0)));
+        }
+        std::copy(warp.begin(), warp.begin() + kWarpParamBytes, o->sdram + kParams);
+        std::copy(o->sdram + 0x3C48, o->sdram + 0x3C48 + kWarpSineBytes, warp.begin() + kWarpParamBytes);
+        // The game's blitter, from the call to its return.
+        uint8_t* s = o->sdram;
+        put16(s + 0x3834, uint16_t(d.clip.left));
+        put16(s + 0x3836, uint16_t(d.clip.right));
+        put32(s + 0x3838, uint32_t(d.clip.top));
+        put32(s + 0x383C, uint32_t(d.clip.bottom));
+        put16(s + 0x3840, uint16_t(d.clip.scale_min));
+        put16(s + 0x3842, uint16_t(d.clip.scale_max));
+        sh2::State& c = o->sh2[0];
+        c.r[1] = uint32_t(d.x); c.r[2] = uint32_t(d.y); c.r[3] = d.flags; c.r[4] = 0x06000000 + kGraphic;
+        c.r[5] = d.kind == SpriteKind::Warped ? 0x06000000 + kParams : uint32_t(d.sx);
+        c.r[6] = uint32_t(d.sy);
+        c.r[15] = 0x0603F000; c.pr = kStop; c.sr = 0xF0;
+        c.pc = d.kind == SpriteKind::Scaled ? patches::kSh2BlitScaled : d.kind == SpriteKind::Warped ? patches::kSh2BlitWarped : patches::kSh2Blit;
+        o->mars.fb_display = 1;
+        blitter.clear();
+        g_oracle_canvas = &blitter;
+        for (int n = 0; n < 1000000 && c.pc != kStop; ++n) { c.cycles = 1 << 20; sh2::interp_block(&c); }
+        raster.clear();
+        rasterise_sprite(d, g.data(), uint32_t(g.size()), raster, warp.data());
+        int bytes = 0, first = -1;
+        for (int i = 0; i < 0x20000; ++i)
+            if (blitter.cov[size_t(i)] != raster.cov[size_t(i)] || (blitter.cov[size_t(i)] && blitter.px[size_t(i)] != raster.px[size_t(i)])) {
+                if (first < 0) first = i;
+                ++bytes;
+            }
+        if (bytes || c.pc != kStop) {
+            if (++differ <= 8)
+                std::printf("SPRITE ORACLE call %d: %s; clip %d,%d,%d,%d: %d bytes differ, first at %05X%s\n", t, describe(d).c_str(),
+                            d.clip.left, d.clip.right, d.clip.top >> 8, d.clip.bottom >> 8, bytes, first,
+                            c.pc != kStop ? " (the blitter did not return)" : "");
+        }
+    }
+    std::printf("sprites oracle: %d calls, %d differ from the game's blitters\n", calls, differ);
+    return differ;
+}
+
 void dump_state(const Machine& m) {
     std::printf("frame %llu | 68K pc=%06X sr=%04X sp=%08X | MSH2 pc=%08X sr=%03X | SSH2 pc=%08X sr=%03X | FS=%d mode=%X\n",
                 (unsigned long long)m.frame_count, m.m68k.pc, m68k::get_sr(&m.m68k), m.m68k.a[7],
@@ -229,6 +386,15 @@ int main(int argc, char** argv) {
     int replay_result = -1;           // what the session it came from produced
     uint64_t stage_started = 0;       // the frame the game took it
     bool stage_pending_last = false;
+    // 32X sprite recording (runtime/sprite_record.h): --sprites installs the
+    // recorder; --sprites-log FRAME[,FRAME...] prints the displayed buffer's
+    // draw list at those frames; --sprites-check rebuilds every new picture's
+    // sprites host-side and compares them with the emulated frame buffer.
+    bool want_sprites = false, sprites_check = false;
+    std::set<uint64_t> sprites_log;
+    // --sprites-oracle N[:SEED]: N random blitter calls, game code vs rebuild.
+    int oracle_calls = 0;
+    uint32_t oracle_seed = 1;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
@@ -296,6 +462,17 @@ int main(int argc, char** argv) {
         else if (a == "--tiles") tiles_dir = next();            // tile replacements (md_<hash>.png)
         else if (a == "--dump-tiles") dump_tiles_dir = next();  // write the tiles drawn here
         else if (a == "--layer") debug_layer = next() == "md" ? 1 : 2;  // md | 32x: one layer in the shots
+        else if (a == "--sprites") want_sprites = true;
+        else if (a == "--sprites-check") want_sprites = sprites_check = true;
+        else if (a == "--sprites-oracle") {
+            const std::vector<std::string> parts = split(next(), ':');
+            oracle_calls = std::atoi(parts[0].c_str());
+            if (parts.size() > 1) oracle_seed = uint32_t(std::strtoul(parts[1].c_str(), nullptr, 10));
+        }
+        else if (a == "--sprites-log") {
+            want_sprites = true;
+            for (auto& s : split(next(), ',')) sprites_log.insert(std::strtoull(s.c_str(), nullptr, 10));
+        }
         else if (a == "--cheat") {
             // A built-in cheat by its key, or Action Replay codes.
             const std::string c = next();
@@ -401,6 +578,7 @@ int main(int argc, char** argv) {
         else { std::fprintf(stderr, "unknown argument %s\n", a.c_str()); return 2; }
     }
     if (rom_path.empty()) { std::fprintf(stderr, "usage: chaotix_headless --rom <file> [--frames N] ...\n"); return 2; }
+    if (oracle_calls > 0) return sprite_oracle(rom_path, oracle_calls, oracle_seed) ? 6 : 0;
 
     auto m = std::make_unique<Machine>();
     std::string err;
@@ -429,6 +607,10 @@ int main(int argc, char** argv) {
             std::printf("tiles: %d replacement(s) loaded\n", load_tile_pack(*m->vdp.tiles, tiles_dir, &messages));
         for (const auto& msg : messages) std::printf("tiles: %s\n", msg.c_str());
         m->vdp.tiles->dumping = !dump_tiles_dir.empty();
+    }
+    if (want_sprites) {
+        m->sprites = std::make_shared<SpriteRecorder>();
+        m->sprites->track_writes = sprites_check;
     }
     if (six_button >= 0) m->input.six_button[0] = m->input.six_button[1] = six_button != 0;
     if (!sram_path.empty()) {
@@ -460,6 +642,9 @@ int main(int argc, char** argv) {
         ref->wide_everywhere = wide_everywhere;
         ref->wide_hud_edges = hud_edges;
         ref->vdp.tiles = m->vdp.tiles;  // the same picture, so the output images compare too
+        // Its own recorder: the interpreter must record the same draws as
+        // the recompiled code (compared every frame below).
+        if (want_sprites) ref->sprites = std::make_shared<SpriteRecorder>();
         if (!rs.active) std::printf("warning: --lockstep without generated code compares the interpreter with itself\n");
     }
     audio::MusicMods music;
@@ -533,6 +718,9 @@ int main(int argc, char** argv) {
         }
         std::printf("achievements: %zu definitions, %d points\n", tracker.list().size(), tracker.points_total());
     }
+    SpriteCanvas sprite_canvas;
+    SpriteCheck sprite_total;
+    uint64_t sprites_key = ~0ull, sprite_pictures = 0, sprite_bad_pictures = 0;
     double worst_ms = 0;
     uint64_t worst_frame = 0, slow_frames = 0, sram_frames = 0;
     auto t0 = std::chrono::steady_clock::now();
@@ -687,7 +875,41 @@ int main(int argc, char** argv) {
                 dump_state(*m);
                 return 3;
             }
+            if (ref->sprites) {
+                for (int b = 0; b < 2; ++b) {
+                    const std::string sd = compare_sprite_lists(ref->sprites->list(b), m->sprites->list(b));
+                    if (sd.empty()) continue;
+                    std::printf("LOCKSTEP DIVERGENCE at frame %llu (reference vs recompiled): sprite list of buffer %d: %s\n",
+                                (unsigned long long)m->frame_count, b, sd.c_str());
+                    return 3;
+                }
+            }
             ++lockstep_ok_frames;
+        }
+        if (m->sprites) {
+            const SpriteList& shown = m->sprites->displayed(*m);
+            if (sprites_log.count(m->frame_count)) {
+                std::printf("sprites: frame %llu, buffer %d on display, %zu draws\n", (unsigned long long)m->frame_count,
+                            m->mars.fb_display, shown.draws.size());
+                for (size_t k = 0; k < shown.draws.size(); ++k) std::printf("  %3zu %s\n", k, describe(shown.draws[k]).c_str());
+            }
+            // Each picture once: a buffer's list starts again (a new serial)
+            // when it becomes the back buffer.
+            const uint64_t key = shown.serial << 1 | m->mars.fb_display;
+            if (sprites_check && key != sprites_key) {
+                sprites_key = key;
+                const SpriteCheck r = check_sprites(*m, *m->sprites, sprite_canvas);
+                ++sprite_pictures;
+                sprite_total.compared += r.compared;
+                sprite_total.wrong += r.wrong;
+                sprite_total.missing += r.missing;
+                sprite_total.extra += r.extra;
+                sprite_total.covered += r.covered;
+                if (r.mismatches()) {
+                    ++sprite_bad_pictures;
+                    if (sprite_bad_pictures <= 8) report_sprite_mismatch(*m, r, shown);
+                }
+            }
         }
         if (nat && centre_compare) {
             nat->input.pad[0] = btn;
@@ -780,6 +1002,18 @@ int main(int argc, char** argv) {
     if (compare_native) std::printf("centre check: %llu widescreen frames with a 4:3 identical centre\n", (unsigned long long)centre_ok_frames);
     if (compare_native && centre_worst) std::printf("centre check: special stage frames differ along polygon edges by at most %d pixels\n", centre_worst);
     if (ref) std::printf("lockstep: %llu frames bit-identical between interpreter and recompiled execution\n", (unsigned long long)lockstep_ok_frames);
+    if (m->sprites) {
+        const SpriteRecorder& sr = *m->sprites;
+        std::printf("sprites: %llu draws recorded (%llu not in the bank table, %llu unreadable), %llu flips\n",
+                    (unsigned long long)sr.draws_recorded, (unsigned long long)sr.unknown_graphics,
+                    (unsigned long long)sr.bad_graphics, (unsigned long long)sr.flips);
+    }
+    if (sprites_check)
+        std::printf("sprites check: %llu pictures, %llu bytes compared, %llu mismatches (wrong %llu, missing %llu, extra %llu) in %llu pictures, %llu bytes drawn over by polygons or fills\n",
+                    (unsigned long long)sprite_pictures, (unsigned long long)sprite_total.compared,
+                    (unsigned long long)sprite_total.mismatches(), (unsigned long long)sprite_total.wrong,
+                    (unsigned long long)sprite_total.missing, (unsigned long long)sprite_total.extra,
+                    (unsigned long long)sprite_bad_pictures, (unsigned long long)sprite_total.covered);
     if (!coverage_path.empty()) {
         if (cov.save(coverage_path)) std::printf("coverage written to %s (%zu entries)\n", coverage_path.c_str(), cov.size());
     }
@@ -794,5 +1028,6 @@ int main(int argc, char** argv) {
                     w16(0xE03A), m->wram[0xE05C], w16(0xE052));
     }
     dump_state(*m);
+    if (sprites_check && sprite_total.mismatches()) return 6;
     return hash_failures ? 4 : 0;
 }
