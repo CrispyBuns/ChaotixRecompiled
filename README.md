@@ -232,6 +232,12 @@ lifted, and steers even after sliding off the base. Its images are
 `stick.bmp` (the base) and `knob.bmp`, each with an optional `_pressed`
 version.
 
+TOUCH LAYOUT (OPTIONS > INPUT, `TouchLayout` in `[Input]`) has CLASSIC,
+every button of the pad, and SONIC CD, the layout of Sonic CD's 2013 mobile
+version: the directions on the left and one large jump button on the right,
+with HOLD (B) and CALL (A) small above it -- the only buttons this game
+uses -- and anywhere else on the lower right of the screen jumping too.
+
 TOUCH OPACITY and PRESSED OPACITY (OPTIONS > INPUT; `TouchOpacity` and
 `TouchPressedOpacity` in `[Input]`) set how opaque the touch controls are at
 rest and while held, custom images included: 65% and 100% by default.

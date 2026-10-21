@@ -5,19 +5,31 @@
 
 namespace chaotix {
 
-void TouchControls::layout(int w, int h, bool stick) {
+void TouchControls::layout(int w, int h, bool stick, bool sonic_cd) {
     buttons_.clear();
     if (stick != stick_ && stick_held_) lift(stick_finger_);
     stick_ = stick;
+    sonic_cd_ = sonic_cd;
+    w_ = float(w);
+    h_ = float(h);
     const float unit = float(std::min(w, h));
     const float pad_r = unit * 0.17f;
     const float btn_r = unit * 0.075f;
     const float margin = unit * 0.05f;
     // D-pad bottom-left
     buttons_.push_back({0, margin + pad_r, float(h) - margin - pad_r, pad_r, stick ? "STICK" : "D-PAD", true});
-    // A B C bottom-right in an arc, X Y Z above
     const float bx = float(w) - margin - btn_r;
     const float by = float(h) - margin - btn_r;
+    if (sonic_cd) {
+        const float jump_r = unit * 0.13f;
+        const float jx = float(w) - margin - jump_r, jy = float(h) - margin - jump_r;
+        buttons_.push_back({PAD_C, jx, jy, jump_r, "C", false});
+        buttons_.push_back({PAD_B, jx - jump_r * 1.25f, jy - jump_r * 1.55f, btn_r * 0.75f, "B", false});
+        buttons_.push_back({PAD_A, jx + jump_r * 0.15f, jy - jump_r * 1.95f, btn_r * 0.75f, "A", false});
+        buttons_.push_back({PAD_START, float(w) * 0.5f, margin + btn_r * 0.6f, btn_r * 0.6f, "START", false});
+        return;
+    }
+    // A B C bottom-right in an arc, X Y Z above
     buttons_.push_back({PAD_C, bx, by - btn_r * 0.6f, btn_r, "C", false});
     buttons_.push_back({PAD_B, bx - btn_r * 2.3f, by, btn_r, "B", false});
     buttons_.push_back({PAD_A, bx - btn_r * 4.6f, by + btn_r * 0.2f, btn_r, "A", false});
@@ -29,17 +41,26 @@ void TouchControls::layout(int w, int h, bool stick) {
 }
 
 uint16_t TouchControls::hit(float x, float y) const {
+    uint16_t out = buttons_at(x, y);
+    for (const auto& b : buttons_) {
+        if (!b.is_dpad) continue;
+        const float dx = x - b.cx, dy = y - b.cy;
+        const float d = std::sqrt(dx * dx + dy * dy);
+        if (d > b.r * 1.3f || d < b.r * 0.15f) continue;
+        out |= stick_directions(dx, dy);
+    }
+    return out;
+}
+
+uint16_t TouchControls::buttons_at(float x, float y) const {
     uint16_t out = 0;
     for (const auto& b : buttons_) {
-        float dx = x - b.cx, dy = y - b.cy;
-        float d = std::sqrt(dx * dx + dy * dy);
-        if (b.is_dpad) {
-            if (d > b.r * 1.3f || d < b.r * 0.15f) continue;
-            out |= stick_directions(dx, dy);
-        } else if (d <= b.r * 1.15f) {
-            out |= b.mask;
-        }
+        if (b.is_dpad) continue;
+        const float dx = x - b.cx, dy = y - b.cy;
+        if (std::sqrt(dx * dx + dy * dy) <= b.r * 1.15f) out |= b.mask;
     }
+    // Sonic CD's layout: anywhere else on the lower right jumps.
+    if (sonic_cd_ && !out && x > w_ * 0.5f && y > h_ * 0.3f) out = PAD_C;
     return out;
 }
 
@@ -62,16 +83,8 @@ uint16_t TouchControls::finger(uint64_t id, float x, float y, bool down) {
     const float dx = x - base.cx, dy = y - base.cy;
     const float d = std::sqrt(dx * dx + dy * dy);
     if (down && !stick_held_ && d <= base.r * 1.3f) { stick_held_ = true; stick_finger_ = id; }
-    if (!stick_held_ || id != stick_finger_) {
-        // Any other finger presses only the buttons, never the stick.
-        uint16_t out = 0;
-        for (size_t i = 1; i < buttons_.size(); ++i) {
-            const TouchButton& b = buttons_[i];
-            const float bx = x - b.cx, by = y - b.cy;
-            if (std::sqrt(bx * bx + by * by) <= b.r * 1.15f) out |= b.mask;
-        }
-        return out;
-    }
+    // Any other finger presses only the buttons, never the stick.
+    if (!stick_held_ || id != stick_finger_) return buttons_at(x, y);
     const float k = d > base.r ? base.r / d : 1.0f;
     knob_dx_ = dx * k;
     knob_dy_ = dy * k;

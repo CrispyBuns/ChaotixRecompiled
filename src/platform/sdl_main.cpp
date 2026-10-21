@@ -1361,7 +1361,7 @@ int main(int argc, char** argv) {
             SDL_RenderTexture(app.renderer, app.texture, &src, &art);
         }
         if (app.touch_enabled) {
-            app.touch.layout(ow, oh, app.cfg.touch_stick);
+            app.touch.layout(ow, oh, app.cfg.touch_stick, app.cfg.touch_sonic_cd);
             draw_touch_controls(app, touch_held);
         }
         if (app.ui.ready()) {

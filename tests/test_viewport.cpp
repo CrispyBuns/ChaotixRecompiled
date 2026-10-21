@@ -119,3 +119,30 @@ TEST(input, touch_joystick_follows_the_thumb) {
     t.layout(1920, 1080, false);
     CHECK_EQ(t.finger(4, s.cx + s.r * 0.8f, s.cy, true), uint16_t(PAD_RIGHT));
 }
+
+TEST(input, touch_sonic_cd_layout) {
+    // Issue #34: Sonic CD's mobile layout. The directions, one big jump (C),
+    // HOLD (B) and CALL (A), Start; no X, Y or Z, which this game ignores; and
+    // the rest of the lower right jumps.
+    TouchControls t;
+    t.layout(1920, 1080, false, true);
+    uint16_t all = 0;
+    for (const auto& b : t.buttons()) all |= b.mask;
+    CHECK_EQ(all, uint16_t(PAD_A | PAD_B | PAD_C | PAD_START));
+    const TouchButton& jump = t.buttons()[1];
+    CHECK_EQ(jump.mask, uint16_t(PAD_C));
+    CHECK(jump.r > t.buttons()[2].r * 2);                       // the big one
+    CHECK_EQ(t.hit(jump.cx, jump.cy), uint16_t(PAD_C));
+    CHECK_EQ(t.hit(1300, 700), uint16_t(PAD_C));                // empty lower right
+    CHECK_EQ(t.hit(t.buttons()[2].cx, t.buttons()[2].cy), uint16_t(PAD_B));
+    CHECK_EQ(t.hit(1300, 100), uint16_t(0));                    // not the top
+    CHECK_EQ(t.hit(700, 700), uint16_t(0));                     // nor the left half
+    // A second finger jumps while the first holds the stick.
+    t.layout(1920, 1080, true, true);
+    const TouchButton& s = t.buttons()[0];
+    CHECK_EQ(t.finger(1, s.cx + s.r * 0.6f, s.cy, true), uint16_t(PAD_RIGHT));
+    CHECK_EQ(t.finger(2, 1400, 800, true), uint16_t(PAD_C));
+    // The classic layout is unchanged: no jumping from empty space.
+    t.layout(1920, 1080, false, false);
+    CHECK_EQ(t.hit(1300, 700), uint16_t(0));
+}

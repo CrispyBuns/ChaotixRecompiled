@@ -16,8 +16,12 @@ struct TouchButton {
 class TouchControls {
 public:
     // Lays out controls for an output of w x h pixels. With stick set the
-    // directions are a joystick rather than a d-pad (issue #30).
-    void layout(int w, int h, bool stick = false);
+    // directions are a joystick rather than a d-pad (issue #30). With
+    // sonic_cd, the layout of Sonic CD's 2013 mobile version (issue #34): the
+    // directions and one large jump button, with HOLD (B) and CALL (A) small
+    // above it -- the only buttons this game uses -- and the whole lower
+    // right of the screen jumping where nothing else is.
+    void layout(int w, int h, bool stick = false, bool sonic_cd = false);
     // Buttons pressed by a touch at (x, y) in output pixels.
     uint16_t hit(float x, float y) const;
     // A finger put down (down) or moved, by its id; returns what it presses.
@@ -34,9 +38,12 @@ public:
 
 private:
     uint16_t stick_directions(float dx, float dy) const;
+    uint16_t buttons_at(float x, float y) const;  // everything but the directions
 
     std::vector<TouchButton> buttons_;
     bool stick_ = false;
+    bool sonic_cd_ = false;
+    float w_ = 0, h_ = 0;
     bool stick_held_ = false;   // a finger has the stick
     uint64_t stick_finger_ = 0;
     float knob_dx_ = 0, knob_dy_ = 0;
