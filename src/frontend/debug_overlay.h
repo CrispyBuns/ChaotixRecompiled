@@ -14,6 +14,8 @@ struct FrameTiming {
     double sim_fps = 0;           // emulated frames per second
     double emu_ms = 0;            // time spent running the machine per frame
     double present_ms = 0;        // time spent rendering/presenting
+    double cpu_percent = -1;      // host-wide CPU utilization; -1 = unavailable
+    double gpu_percent = -1;      // GPU utilization when the driver exposes it; -1 = unavailable
     unsigned refresh_hz = 0;      // display refresh rate (0 = unknown)
     bool fast_forward = false;
 };
