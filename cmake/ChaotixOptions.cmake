@@ -17,14 +17,14 @@ function(chaotix_set_warnings target)
         target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wno-unused-parameter)
-        # RG35XX-H uses Cortex-A55 cores. Tune ARM64 builds for that CPU so
+        # RG35XX-H uses Cortex-A53 cores. Tune ARM64 builds for that CPU so
         # the SH-2 interpreter and software 32X polygon/framebuffer path can
         # benefit from target-specific scheduling and instruction selection.
         # CMake still supplies the selected build type optimization level
         # (Release uses -O3); this only adds CPU tuning, not unsafe math flags.
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|AARCH64)$"
            AND CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
-            target_compile_options(${target} PRIVATE -mcpu=cortex-a55)
+            target_compile_options(${target} PRIVATE -mcpu=cortex-a53)
         endif()
     endif()
 endfunction()
