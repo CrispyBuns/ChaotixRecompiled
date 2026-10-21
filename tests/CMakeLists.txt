@@ -19,6 +19,7 @@ add_executable(chaotix_tests
     test_rom_patch.cpp
     test_tile_replace.cpp
     test_image_io.cpp
+    test_sprite_record.cpp
 )
 target_link_libraries(chaotix_tests PRIVATE chaotix_game chaotix_runtime)
 
@@ -193,6 +194,51 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
         COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1300 --lockstep
                 --stage 300:10:3:0:4:3:0 --fuzz 7:700:2400)
     set_tests_properties(lockstep_special_stage_variables PROPERTIES TIMEOUT 900)
+
+    # 32X sprite recording (issue #35, docs/SPRITES_32X.md). The host-side
+    # rebuild of the blitters must be exact: random calls drawn by the game's
+    # own blitter code (interpreted) and by the rebuild must write the same
+    # bytes ...
+    add_test(NAME sprites_rebuild_matches_the_blitters
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --sprites-oracle 4000)
+    set_tests_properties(sprites_rebuild_matches_the_blitters PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "sprites oracle: 4000 calls, 0 differ")
+    # ... and every picture of these scenes, rebuilt from its draw list, must
+    # give back what the blitters left in the frame buffer, byte for byte:
+    # a level, the lobby, the bonus stage, the title and its menus, the
+    # special stage; with random input, in widescreen and 4:3.
+    add_test(NAME sprites_check_level_widescreen
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3000 --stage 300:0:1:0:2:7:0 --fuzz 1:700:3000
+                --wide 53 --sprites-check)
+    add_test(NAME sprites_check_lobby
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3000 --stage 300:7:0:0:2:7:0 --fuzz 2:700:3000
+                --wide 53 --sprites-check)
+    add_test(NAME sprites_check_bonus_stage
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3000 --stage 300:9:0:0:2:7:0 --fuzz 3:700:3000
+                --sprites-check)
+    add_test(NAME sprites_check_title_and_menus
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3000 --fuzz 4:1500:3000 --wide 53 --sprites-check)
+    add_test(NAME sprites_check_special_stage
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3000 --stage 300:10:0:0:2:7:0 --fuzz 5:700:3000
+                --wide 53 --sprites-check)
+    # A widened level whose fills reach the margins (Marina Madness).
+    add_test(NAME sprites_check_level_fills_in_the_margins
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2000 --stage 300:4:1:0:6:3:0 --fuzz 14:700:3000
+                --wide 53 --hud-edges --sprites-check)
+    set_tests_properties(sprites_check_level_widescreen sprites_check_lobby sprites_check_bonus_stage
+        sprites_check_title_and_menus sprites_check_special_stage sprites_check_level_fills_in_the_margins
+        PROPERTIES TIMEOUT 600 PASS_REGULAR_EXPRESSION "sprites check: [1-9][0-9]* pictures, [1-9][0-9]* bytes compared, 0 mismatches")
+    # The recorder's hooks run in the interpreter and the recompiled code at
+    # the same instructions: both machines record the same draw lists, and
+    # stay bit-identical.
+    add_test(NAME lockstep_sprites_level
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3000 --stage 300:0:1:0:2:7:0 --fuzz 6:700:3000
+                --wide 53 --lockstep --sprites-check)
+    add_test(NAME lockstep_sprites_bonus_stage
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2000 --stage 300:9:0:0:2:7:0 --fuzz 3:700:3000
+                --lockstep --sprites-check)
+    set_tests_properties(lockstep_sprites_level lockstep_sprites_bonus_stage PROPERTIES TIMEOUT 900
+        PASS_REGULAR_EXPRESSION "frames bit-identical.*sprites check: [1-9][0-9]* pictures, [1-9][0-9]* bytes compared, 0 mismatches")
 
     add_test(NAME golden_frames_16_9
         COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3200 --wide 53 ${_script}
