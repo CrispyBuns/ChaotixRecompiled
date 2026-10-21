@@ -81,6 +81,12 @@ bool patched_immediate(const FnCtx& x, const sh2::Insn& in) {
     return in_sdram(in.pc) && patches::is_patched_sh2_immediate(in.pc & 0x3FFFF);
 }
 
+// A record-only host hook runs before this instruction (patches.h,
+// kSh2Hooks): it belongs to the SDRAM routine at that address.
+bool sh2_hook_at(const FnCtx& x, uint32_t pc) {
+    return x.ram && in_sdram(pc) && patches::is_sh2_hook(pc);
+}
+
 // Emits the semantics of a non-branch instruction. Literal-pool loads from
 // ROM-derived memory are folded into constants -- except in SDRAM, where a
 // "literal" can be a variable: the special stage keeps values in words after
@@ -335,7 +341,12 @@ void emit_sh2(const Program& p, const EmitOptions& opt, EmitResult& out) {
                 else if (f.space >= 0 && b.end > b.start)
                     x.rom_code.push_back({p.spaces[size_t(f.space)].to_rom(b.start), b.end - b.start});
                 x.o.f("%s:\n", label(b.start).c_str());
-                const SelfLoop loop = analyze_self_loop(p, b);
+                // A record-only hook (patches.h, kSh2Hooks) runs before its
+                // instruction in the interpreter, every time; a loop skipped
+                // in closed form would call it fewer times.
+                bool hooked = false;
+                for (uint32_t a : b.insns) hooked = hooked || sh2_hook_at(x, a);
+                const SelfLoop loop = hooked ? SelfLoop{} : analyze_self_loop(p, b);
                 if (loop.kind == SelfLoop::DELAY) {
                     // Counted delay loop `dt rN ; bf self` (4 cycles per taken
                     // iteration): skip whole iterations in closed form, stopping
@@ -352,6 +363,7 @@ void emit_sh2(const Program& p, const EmitOptions& opt, EmitResult& out) {
                     p.decode_sh2(b.insns[n], in);
                     ++out.instructions;
                     x.o.f("  // %08X: %s\n", in.pc, sh2::disassemble(in).c_str());
+                    if (sh2_hook_at(x, in.pc)) x.o.f("  if (c->hook) c->hook(c, 0x%08Xu);\n", in.pc);
                     if (in.flags & sh2::IF_BRANCH) { emit_branch(x, in, n + 1 == b.insns.size() ? &loop : nullptr); continue; }
                     x.o.f("  c->cycles -= %u;\n", in.cycles);
                     if (sh2::ends_block(in)) {

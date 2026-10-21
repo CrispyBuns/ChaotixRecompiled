@@ -116,6 +116,36 @@ constexpr bool is_m68k_hook(uint32_t pc) {
     return false;
 }
 
+// Record-only SH-2 hooks (the 32X sprite recorder, runtime/sprite_record.h;
+// see docs/SPRITES_32X.md). They run before the instruction at these master
+// SH-2 addresses -- the entries of the SDRAM routines copied from ROM 0x77800
+// -- in the interpreter and in the generated code alike, read registers and
+// memory, and write nothing the machine sees, so lockstep still holds. A
+// routine run from another address (a ROM or cache-through copy) is not
+// hooked.
+enum : uint32_t {
+    kSh2RecolourCopy = 0x06000810,  // r1 graphic, r2 scratch buffer, r3 colour offset
+    kSh2Blit = 0x06001380,          // r1 X, r2 Y, r3 flags, r4 graphic
+    kSh2BlitScaled = 0x06001F18,    // also r5 SX, r6 SY (8.8)
+    kSh2BlitWarped = 0x060023EC,    // r1-r4, and r5 -> 16 bytes of stretch parameters
+};
+// Sorted, like kM68kHooks.
+inline constexpr uint32_t kSh2Hooks[] = {kSh2RecolourCopy, kSh2Blit, kSh2BlitScaled, kSh2BlitWarped};
+constexpr uint32_t kSh2HookCount = uint32_t(sizeof kSh2Hooks / sizeof kSh2Hooks[0]);
+
+constexpr bool sh2_hooks_sorted() {
+    for (size_t i = 1; i < kSh2HookCount; ++i)
+        if (kSh2Hooks[i - 1] >= kSh2Hooks[i]) return false;
+    return true;
+}
+static_assert(sh2_hooks_sorted(), "kSh2Hooks must be sorted");
+
+constexpr bool is_sh2_hook(uint32_t pc) {
+    for (uint32_t h : kSh2Hooks)
+        if (h == pc) return true;
+    return false;
+}
+
 // 32X sprite/polygon renderers (master SH-2, SDRAM image copied from ROM
 // 0x77800) clip against a rectangle stored as data at SDRAM 0x06003834:
 // int16 left/right in pixels, int32 top/bottom in 24.8 fixed point
