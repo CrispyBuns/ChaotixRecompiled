@@ -179,6 +179,7 @@ int main(int argc, char** argv) {
     bool trace_wide = false;
     bool wide_everywhere = false;  // also widen the scenes kept 4:3
     bool hud_edges = false;        // the HUD at the widened picture's edge
+    int debug_layer = 0;
     std::vector<std::string> patch_files;  // --patch FILE: IPS/BPS applied to the ROM in memory
     std::vector<cheats::Write> cheat_writes;  // --cheat, set before every frame
     uint64_t wide_live_frames = 0;
@@ -289,6 +290,7 @@ int main(int argc, char** argv) {
         else if (a == "--wide-everywhere") wide_everywhere = true;
         else if (a == "--hud-edges") hud_edges = true;
         else if (a == "--patch") patch_files.push_back(next());
+        else if (a == "--layer") debug_layer = next() == "md" ? 1 : 2;  // md | 32x: one layer in the shots
         else if (a == "--cheat") {
             // A built-in cheat by its key, or Action Replay codes.
             const std::string c = next();
@@ -412,6 +414,7 @@ int main(int argc, char** argv) {
     m->wide_extra_bottom = wide_bottom;
     m->wide_everywhere = wide_everywhere;
     m->wide_hud_edges = hud_edges;
+    m->debug_layer = debug_layer;
     if (six_button >= 0) m->input.six_button[0] = m->input.six_button[1] = six_button != 0;
     if (!sram_path.empty()) {
         // Cartridge saves change what the game does, so a replay of somebody

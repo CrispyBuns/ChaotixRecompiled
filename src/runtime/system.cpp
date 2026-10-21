@@ -360,6 +360,9 @@ void Machine::render_output_line(int src_line, int dst_row) {
         bool mdbg = bg[x] != 0;
         if (show32x || ((p >> 24) == 0xFD && mdbg)) row[x] = 0xFF000000u | (p & 0xFFFFFF);
         else row[x] = md[x];
+        // Debugging: one layer alone, the other shown as magenta.
+        if (debug_layer == 1) row[x] = md[x];
+        else if (debug_layer == 2 && !(show32x || ((p >> 24) == 0xFD && mdbg))) row[x] = 0xFFFF00FFu;
     }
     if (extra) {
         // Scenes without widescreen support: black side bars. In a level,
