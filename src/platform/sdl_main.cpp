@@ -18,6 +18,7 @@
 #include "frontend/setup.h"
 #include "platform/sdl_setup.h"
 #include "platform/frame_pacing.h"
+#include "platform/system_metrics.h"
 #include "platform/menu.h"
 #include "platform/ui.h"
 #include "game/achievements.h"
@@ -80,6 +81,7 @@ struct App {
     bool fast_forward = false;
     int overlay_page = 0;
     FrameTiming timing;
+    SystemMetrics system_metrics;
     std::vector<uint32_t> watches = {0xFFF000, 0xFFF010};
     uint64_t sram_dirty_since = 0;
     // --autotest: run N frames with scripted input, capture the presented
@@ -1366,6 +1368,9 @@ int main(int argc, char** argv) {
             app.ui.end_frame();
         }
         if (app.cfg.debug_overlay) {
+            app.system_metrics.update();
+            app.timing.cpu_percent = app.system_metrics.cpu_percent();
+            app.timing.gpu_percent = app.system_metrics.gpu_percent();
             const SDL_DisplayMode* dm = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(app.window));
             app.timing.refresh_hz = dm ? unsigned(dm->refresh_rate + 0.5f) : 0;
             app.timing.fast_forward = app.fast_forward;
