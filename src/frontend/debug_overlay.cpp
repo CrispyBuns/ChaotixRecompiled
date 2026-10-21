@@ -24,6 +24,9 @@ std::vector<std::string> build_debug_overlay(const Machine& m, const FrameTiming
     out.push_back(fmt("render %.1f fps  sim %.2f fps%s  frame %llu  display %uHz", t.render_fps, t.sim_fps,
                       t.fast_forward ? " (FF)" : "", (unsigned long long)m.frame_count, t.refresh_hz));
     out.push_back(fmt("emu %.2f ms/frame  present %.2f ms", t.emu_ms, t.present_ms));
+    out.push_back(fmt("host CPU %s  GPU %s",
+                      t.cpu_percent >= 0.0 ? fmt("%.0f%%", t.cpu_percent).c_str() : "N/A",
+                      t.gpu_percent >= 0.0 ? fmt("%.0f%%", t.gpu_percent).c_str() : "N/A"));
     out.push_back(fmt("code: %s  native 68K %.1f%%  MSH2 %.1f%%  SSH2 %.1f%%", d.recompiled ? "recompiled" : "interpreter",
                       d.m68k_native_pct, d.sh2_native_pct[0], d.sh2_native_pct[1]));
     out.push_back(video_line);
