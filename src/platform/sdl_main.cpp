@@ -1066,6 +1066,8 @@ int main(int argc, char** argv) {
     app.m->input.six_button[1] = app.cfg.six_button;
     warn_about_dead_bindings(app);
     app.m->reset();
+    // --log-timing also enables per-subsystem profiling for the slow-stage investigation.
+    app.m->profile = app.log_timing;
     if (!app.autotest_frames) app.store.load_sram(*app.m);  // autotests are hermetic
     RecompStatus rs = install_recompiled_code(*app.m, app.cfg.use_recompiled && !force_interp);
     LOGI("app", "execution: %s", rs.description.c_str());
@@ -1126,6 +1128,7 @@ int main(int argc, char** argv) {
     uint64_t fps_t0 = last, fps_frames = 0, fps_sims = 0;
     uint64_t pass_start = last;
     double worst_pass = 0, worst_emu = 0, worst_present = 0;
+    std::array<uint64_t, PROF_COUNT> prof_last{};
 
     bool menu_was_open = app.menu.open();
     while (app.running) {
@@ -1410,10 +1413,21 @@ int main(int argc, char** argv) {
             double s = double(now - fps_t0) / double(freq);
             app.timing.render_fps = double(fps_frames) / s;
             app.timing.sim_fps = double(fps_sims) / s;
-            if (app.log_timing)
+            if (app.log_timing) {
                 LOGI("timing", "frame %llu: %.1f presented/s, %.1f emulated/s, slowest pass %.1f ms (emulation %.1f, present %.1f)",
                      (unsigned long long)app.m->frame_count, app.timing.render_fps, app.timing.sim_fps, worst_pass,
                      worst_emu, worst_present);
+                const auto& ns = app.m->stats.prof_ns;
+                const double frames = std::max(1.0, double(fps_sims));
+                LOGI("profile", "per emulated frame (ms): 68K %.3f Z80 %.3f MSH2 %.3f SSH2 %.3f video %.3f audio %.3f",
+                     double(ns[PROF_M68K] - prof_last[PROF_M68K]) / 1.0e6 / frames,
+                     double(ns[PROF_Z80] - prof_last[PROF_Z80]) / 1.0e6 / frames,
+                     double(ns[PROF_MSH2] - prof_last[PROF_MSH2]) / 1.0e6 / frames,
+                     double(ns[PROF_SSH2] - prof_last[PROF_SSH2]) / 1.0e6 / frames,
+                     double(ns[PROF_VIDEO] - prof_last[PROF_VIDEO]) / 1.0e6 / frames,
+                     double(ns[PROF_AUDIO] - prof_last[PROF_AUDIO]) / 1.0e6 / frames);
+                for (int i = 0; i < PROF_COUNT; ++i) prof_last[i] = ns[i];
+            }
             worst_pass = worst_emu = worst_present = 0;
             fps_frames = fps_sims = 0;
             fps_t0 = now;
