@@ -60,6 +60,8 @@ people below. Thank you all: every report here led to a fix or a feature.
   ([#30](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/30)).
 - **[DanKorell](https://github.com/DanKorell)**: the lines in the menu text
   ([#5](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/5)).
+- **[Heartic12](https://github.com/Heartic12)**: the special stage lag on a
+  slow PC ([#31](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/31)).
 - **[iisonic707ii-spec](https://github.com/iisonic707ii-spec)**: the special
   stage's black lines and its widescreen in play
   ([#21](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/21)).
