@@ -3,6 +3,7 @@
 #include "cpu/m68k/m68k_interp.h"
 #include "runtime/patches.h"
 #include "cpu/sh2/sh2_interp.h"
+#include "runtime/sprite_record.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -325,7 +326,10 @@ void Machine::start_line() {
     z80.irq_line = line == kActiveLines ? 1 : 0;  // Z80 /INT for one line at V-blank
     if (line == kActiveLines) {
         // V-blank start: 32X frame buffer swap and V interrupt.
-        if (mars.fb_display != mars.fb_select_req) mars.fb_display = mars.fb_select_req;
+        if (mars.fb_display != mars.fb_select_req) {
+            mars.fb_display = mars.fb_select_req;
+            if (sprites) sprites->flipped(*this);
+        }
         for (int c = 0; c < 2; ++c) mars.irq_pending[c] |= 0x08;
     }
     // 32X H interrupt every (HCOUNT + 1) lines.
@@ -395,6 +399,14 @@ void Machine::end_line() {
 
 void Machine::run_frame() {
     patches::begin_frame(*this);
+    // The sprite recorder's hooks, on the master SH-2 (the only one that
+    // draws). Set every frame: a copy of a machine shares the recorder but
+    // must report its own state.
+    sh2::State& ms = sh2[0];
+    ms.hook = sprites ? sprite_sh2_hook : nullptr;
+    ms.hook_user = this;
+    ms.hook_pcs = patches::kSh2Hooks;
+    ms.hook_count = patches::kSh2HookCount;
     for (line = 0; line < kLinesPerFrameNTSC; ++line) {
         line_start_mclk = mclk;
         start_line();

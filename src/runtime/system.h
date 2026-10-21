@@ -19,9 +19,12 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace chaotix {
+
+class SpriteRecorder;
 
 constexpr int kMclkPerLine = 3420;
 constexpr int kLinesPerFrameNTSC = 262;
@@ -199,6 +202,10 @@ public:
     void (*on_fb_write)(void* user, uint32_t off, uint32_t v, int size, bool overwrite) = nullptr;
     void (*on_fb_fill)(void* user, uint32_t word_addr, uint32_t words, uint16_t data) = nullptr;
     void* on_fb_write_user = nullptr;
+    // 32X sprite recording (runtime/sprite_record.h): the blitters' calls as
+    // draw lists. Output only, like the tile replacer: its SH-2 hooks write
+    // nothing the machine sees. Copies of a machine share it.
+    std::shared_ptr<SpriteRecorder> sprites;
 
     // Components
     Rom rom;
