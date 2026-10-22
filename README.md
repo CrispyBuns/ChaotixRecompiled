@@ -133,8 +133,9 @@ yellow capitals of its TRAINING and DATA LOAD screens -- and shows the game's
 zones behind itself, a different one each time it opens, under a translucent
 coat of that zone's colour. Both are made from your ROM: the font is read
 from it at start-up, and each zone's picture is rendered once by the game
-itself, on a second machine in the background (a couple of seconds each on a
-PC, longer on a phone), then kept in the user data folder under
+itself, on a second machine in the background while a menu is open -- it is
+paused whenever you are playing -- (a couple of seconds each on a PC, longer
+on a phone), then kept in the user data folder under
 `Cache/Backdrops`. Until a picture exists the menu is plain. OPTIONS > EXTRAS
 > MENU FONT (GAME / PIXEL) and MENU BACKGROUND (ZONE / PLAIN), `MenuFont` and
 `MenuBackground` in `[Video]`, bring back the earlier look. How it works:

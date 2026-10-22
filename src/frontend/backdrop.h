@@ -43,11 +43,21 @@ constexpr int kBackdropWideExtra = 40;
 // card has gone and the level has settled.
 constexpr int kBackdropSettleFrames = 480;
 
+// How a caller steers a backdrop being rendered on another thread. Both flags
+// are read before every emulated frame of the backdrop machine.
+struct BackdropControl {
+    std::atomic<bool> cancel{false};  // give up (the program is closing)
+    // Hold still between frames: the game is being played and must not share
+    // the CPU with this (slow machines have no core to spare, issue #31).
+    std::atomic<bool> pause{false};
+    std::atomic<uint64_t> frames{0};  // emulated so far, for tests and logs
+};
+
 // Renders the backdrop on a machine of its own (interpreted, so it may run on
 // any thread while the recompiled machine plays). False (and `why`) if the
-// stage never started. `cancel` is polled once a frame.
+// stage never started or it was cancelled.
 bool render_backdrop(const Rom& rom, const BackdropSpec& spec, BackdropImage& out, std::string* why,
-                     const std::atomic<bool>* cancel = nullptr);
+                     BackdropControl* control = nullptr);
 
 // A dark, saturated colour from the picture, for the translucent overlay that
 // keeps the menu readable over it: the average colour, darkened (ARGB).

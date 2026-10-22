@@ -92,6 +92,16 @@ picture there. It happens once per ROM, on a low-priority thread
 it is plain until the first picture is ready and picks the others up as they
 arrive. With MENU BACKGROUND on PLAIN nothing is made at all.
 
+The worker never competes with the game: slow machines have no core to spare
+(issue #31's Celeron needed 20-37 ms a frame; phones share caches and thermal
+headroom between few cores). It starts only while the front end or a menu
+page is open, and the moment the game is played with no menu open it is held
+between two frames of its machine (`BackdropControl::pause`, polled before
+each one; a frame takes about 3 ms on the development PC) -- paused, not
+cancelled -- and it carries on from there when a menu opens again. So on a
+slow machine the pictures appear over a few visits to the menu. Autotests
+still wait for the first picture before they run.
+
 **Cache.** Each picture is written as a PNG to
 `<user data>/Cache/Backdrops/v1-<first 12 hex digits of the ROM's SHA-1>/<zone>.png`
 (the patched image's SHA-1 when ROM patches are applied, since they can change

@@ -38,6 +38,7 @@ if(CHAOTIX_BUILD_FRONTEND)
         test_time_attack.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/menu.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/ui.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/backdrops.cpp
         ${CMAKE_SOURCE_DIR}/src/frontend/config.cpp
         ${CHAOTIX_EMBEDDED_SOURCES})
     target_link_libraries(chaotix_tests PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)

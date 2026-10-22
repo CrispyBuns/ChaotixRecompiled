@@ -5,6 +5,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <set>
@@ -253,5 +254,55 @@ TEST(game_font, a_backdrop_renders_beside_a_playing_machine) {
     std::set<uint32_t> colours(image.pixels.begin(), image.pixels.end());
     CHECK(colours.size() > 32);
     CHECK((backdrop_tint(image) >> 24) == 0xFF);
+}
+
+TEST(game_font, a_paused_backdrop_makes_no_progress_and_resumes) {
+    // While the game is played the picture's machine is held between two of
+    // its frames, so it takes no CPU from the game; it then carries on where
+    // it was, and the picture is the same as one made in one go.
+    Rom rom;
+    std::string err;
+    CHECK(rom.load(CHAOTIX_TEST_ROM, &err));
+    auto wait_ms = [](int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); };
+    BackdropControl control;
+    control.pause = true;  // "playing" from the start
+    BackdropImage paused_image;
+    bool ok = false;
+    std::thread worker([&] {
+        std::string why;
+        ok = render_backdrop(rom, backdrop_specs().front(), paused_image, &why, &control);
+    });
+    wait_ms(300);
+    CHECK_EQ(control.frames.load(), uint64_t(0));  // not one frame while held
+    control.pause = false;                         // a menu opened
+    for (int i = 0; i < 400 && control.frames.load() < 60; ++i) wait_ms(5);
+    CHECK(control.frames.load() >= 60);
+    control.pause = true;                          // back to playing
+    wait_ms(50);                                   // the frame in progress ends
+    const uint64_t held = control.frames.load();
+    wait_ms(300);
+    CHECK_EQ(control.frames.load(), held);
+    control.pause = false;
+    worker.join();
+    CHECK(ok);
+    BackdropImage straight;
+    std::string why;
+    CHECK(render_backdrop(rom, backdrop_specs().front(), straight, &why));
+    CHECK(straight.pixels == paused_image.pixels);
+
+    // Cancelling wakes a held worker at once.
+    BackdropControl stop;
+    stop.pause = true;
+    BackdropImage none;
+    bool cancelled_ok = true;
+    std::thread held_worker([&] {
+        std::string w;
+        cancelled_ok = render_backdrop(rom, backdrop_specs().front(), none, &w, &stop);
+    });
+    wait_ms(50);
+    stop.cancel = true;
+    held_worker.join();
+    CHECK(!cancelled_ok);
+    CHECK_EQ(stop.frames.load(), uint64_t(0));
 }
 #endif

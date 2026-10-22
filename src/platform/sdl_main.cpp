@@ -1368,7 +1368,7 @@ int main(int argc, char** argv) {
         // picture exists, not the plain look of the first seconds.
         const Uint64 give_up = SDL_GetTicks() + 60000;
         while (app.backdrops.ready_count() == 0 && SDL_GetTicks() < give_up) {
-            app.backdrops.update(app.renderer, true);
+            app.backdrops.update(app.renderer, true, true);
             SDL_Delay(20);
         }
     }
@@ -1658,7 +1658,7 @@ int main(int argc, char** argv) {
         if (app.ui.ready()) {
             app.ui.begin_frame();
             panelled = app.menu.art_panel(app.ui, &art);
-            app.backdrops.update(app.renderer, app.cfg.menu_backdrop);
+            app.backdrops.update(app.renderer, app.cfg.menu_backdrop, app.menu.open());
             MenuBackdrops::Shown zone;
             if (app.backdrops.current(zone)) {
                 auto colour = [](uint32_t argb, uint8_t a) {

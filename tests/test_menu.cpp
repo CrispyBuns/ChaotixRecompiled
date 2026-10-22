@@ -13,7 +13,9 @@
 
 #include "frontend/config.h"
 #include "game/achievements.h"
+#include "platform/backdrops.h"
 #include "renderer/game_font.h"
+#include "runtime/rom.h"
 #include "test_framework.h"
 
 using namespace chaotix;
@@ -977,3 +979,49 @@ TEST(menu, a_zone_picture_fills_the_panel_when_asked) {
     CHECK(plain < 30);   // the theme's near-black
     SDL_DestroyTexture(red);
 }
+
+#ifdef CHAOTIX_TEST_ROM
+TEST(menu, zone_pictures_are_made_only_while_a_menu_is_open) {
+    // The worker must not compete with the game (issue #31's slow machines):
+    // it starts only with a menu open, holds still between its frames while
+    // the game is played, and goes on when a menu opens again.
+    Drawn d;
+    CHECK(d.ok);
+    if (!d.ok) return;
+    Rom rom;
+    std::string err;
+    CHECK(rom.load(CHAOTIX_TEST_ROM, &err));
+    const std::string dir = "backdrop_cache_test/";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    auto wait_ms = [](int ms) { SDL_Delay(Uint32(ms)); };
+    {
+        MenuBackdrops b;
+        b.configure(rom, dir);
+        b.update(d.renderer, true, false);  // playing: nothing starts
+        CHECK(!b.busy());
+        CHECK(b.paused());
+        b.update(d.renderer, true, true);   // a menu opened
+        CHECK(b.busy());
+        CHECK(!b.paused());
+        for (int i = 0; i < 400 && b.frames_emulated() < 30; ++i) wait_ms(5);
+        CHECK(b.frames_emulated() >= 30);
+        b.update(d.renderer, true, false);  // closed again: held, not cancelled
+        CHECK(b.paused());
+        CHECK(b.busy());
+        wait_ms(50);
+        const uint64_t held = b.frames_emulated();
+        wait_ms(300);
+        CHECK_EQ(b.frames_emulated(), held);
+        b.update(d.renderer, true, true);
+        for (int i = 0; i < 400 && b.frames_emulated() < held + 30; ++i) wait_ms(5);
+        CHECK(b.frames_emulated() >= held + 30);
+        // MENU BACKGROUND on PLAIN holds it too, even with a menu open.
+        b.update(d.renderer, false, true);
+        CHECK(b.paused());
+        b.shutdown();                         // a held worker still stops
+        CHECK(!b.busy());
+    }
+    std::filesystem::remove_all(dir, ec);
+}
+#endif

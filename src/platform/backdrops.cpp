@@ -54,8 +54,12 @@ void MenuBackdrops::make_texture(SDL_Renderer* renderer, Entry& e, const Backdro
     e.accent = backdrop_accent(image);
 }
 
-void MenuBackdrops::update(SDL_Renderer* renderer, bool wanted) {
+void MenuBackdrops::update(SDL_Renderer* renderer, bool wanted, bool menu_open) {
     if (!rom_ || !renderer) return;
+    // Held between its frames whenever nobody is looking at a menu, or the
+    // setting is off: slow machines have no core to spare for it in play
+    // (issue #31), and one backdrop frame is well under a game frame.
+    control_.pause = !(wanted && menu_open);
     if (worker_.joinable() && !working_.load()) worker_.join();
     std::vector<Finished> done;
     {
@@ -96,13 +100,13 @@ void MenuBackdrops::update(SDL_Renderer* renderer, bool wanted) {
     if (current_ < 0)
         for (size_t i = 0; i < entries_.size(); ++i)
             if (entries_[i].texture) { current_ = int(i); break; }
-    if (worker_.joinable()) return;
+    if (worker_.joinable() || !menu_open) return;
     // One picture at a time, in the list's order, so the first is ready as
     // soon as possible and a slow device is never running more than one.
     for (size_t i = 0; i < entries_.size(); ++i) {
         if (entries_[i].texture || entries_[i].failed) continue;
         working_ = true;
-        cancel_ = false;
+        control_.cancel = false;
         const BackdropSpec spec = entries_[i].spec;
         const Rom* rom = rom_.get();
         worker_ = std::thread([this, i, spec, rom] {
@@ -111,7 +115,7 @@ void MenuBackdrops::update(SDL_Renderer* renderer, bool wanted) {
             Finished f;
             f.index = i;
             const auto t0 = std::chrono::steady_clock::now();
-            f.ok = render_backdrop(*rom, spec, f.image, &f.why, &cancel_);
+            f.ok = render_backdrop(*rom, spec, f.image, &f.why, &control_);
             f.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -149,7 +153,7 @@ int MenuBackdrops::ready_count() const {
 }
 
 void MenuBackdrops::shutdown() {
-    cancel_ = true;
+    control_.cancel = true;  // also wakes a paused worker
     if (worker_.joinable()) worker_.join();
     {
         std::lock_guard<std::mutex> lock(mutex_);

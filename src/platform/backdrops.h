@@ -37,8 +37,17 @@ public:
     // Main thread, once a frame. While `wanted`, loads the cached pictures,
     // starts the worker on the first one missing, and turns what it finished
     // into a texture (and a PNG in the cache). Nothing happens while not
-    // wanted, so the setting turned off costs nothing.
-    void update(SDL_Renderer* renderer, bool wanted);
+    // wanted, so the setting turned off costs nothing. The worker only runs
+    // while `menu_open`: while the game is played it is paused between two
+    // of its frames (not cancelled), so it never takes CPU from the game, and
+    // it carries on when a menu opens again.
+    void update(SDL_Renderer* renderer, bool wanted, bool menu_open);
+    // Whether the worker is currently held (for tests and logs).
+    bool paused() const { return control_.pause.load(); }
+    // Whether a picture is being made (running or paused), and how many
+    // frames of its machine have been emulated so far.
+    bool busy() const { return worker_.joinable(); }
+    uint64_t frames_emulated() const { return control_.frames.load(); }
     // The next picture, when the menu opens.
     void advance();
 
@@ -79,7 +88,7 @@ private:
     int current_ = -1;
 
     std::thread worker_;
-    std::atomic<bool> cancel_{false};
+    BackdropControl control_;
     std::atomic<bool> working_{false};
     std::mutex mutex_;
     std::vector<Finished> finished_;  // guarded by mutex_

@@ -1,7 +1,9 @@
 #include "frontend/backdrop.h"
 
 #include <algorithm>
+#include <chrono>
 #include <memory>
+#include <thread>
 
 #include "input/input.h"
 #include "runtime/patches.h"
@@ -52,7 +54,7 @@ const std::vector<BackdropSpec>& backdrop_specs() {
 }
 
 bool render_backdrop(const Rom& rom, const BackdropSpec& spec, BackdropImage& out, std::string* why,
-                     const std::atomic<bool>* cancel) {
+                     BackdropControl* control) {
     auto fail = [why](const char* m) { if (why) *why = m; return false; };
     stage_select::Request request;
     request.place = spec.place;
@@ -79,7 +81,13 @@ bool render_backdrop(const Rom& rom, const BackdropSpec& spec, BackdropImage& ou
     uint64_t taken = 0;
     constexpr uint64_t kGiveUp = 1500;
     while (m->frame_count < kGiveUp) {
-        if (cancel && cancel->load(std::memory_order_relaxed)) return fail("cancelled");
+        if (control) {
+            // Paused between frames, so the game gets the CPU back within one
+            // backdrop frame (well under a millisecond on a PC).
+            while (control->pause.load() && !control->cancel.load())
+                std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            if (control->cancel.load()) return fail("cancelled");
+        }
         uint16_t pad = 0;
         if (m->stage_pending) {
             pad = kick % 24 < 6 ? uint16_t(PAD_START) : uint16_t(0);
@@ -90,6 +98,7 @@ bool render_backdrop(const Rom& rom, const BackdropSpec& spec, BackdropImage& ou
         m->input.pad[0] = pad;
         m->input.pad[1] = 0;
         m->run_frame();
+        if (control) control->frames.fetch_add(1);
         if (taken && m->frame_count >= taken + kBackdropSettleFrames) break;
     }
     if (!taken || m->frame_count < taken + kBackdropSettleFrames) return fail("the stage did not start");
