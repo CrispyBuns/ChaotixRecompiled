@@ -3,6 +3,7 @@
 // it key presses and inspecting the Config it was bound to.
 #include "platform/menu.h"
 
+#include <array>
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
@@ -12,6 +13,7 @@
 
 #include "frontend/config.h"
 #include "game/achievements.h"
+#include "renderer/game_font.h"
 #include "test_framework.h"
 
 using namespace chaotix;
@@ -836,4 +838,142 @@ TEST(menu, touch_opacity_is_set_and_kept) {
     CHECK_EQ(back.touch_opacity, 0);
     CHECK_EQ(back.touch_pressed_opacity, 95);
     std::remove(path.c_str());
+}
+
+TEST(menu, the_menus_look_is_an_extras_setting_and_is_kept) {
+    // Issue #8: the game's font and the zones behind the menu, on by
+    // default; PIXEL and PLAIN give the earlier look back.
+    Config cfg;
+    cfg.set_defaults();
+    CHECK(cfg.menu_game_font);
+    CHECK(cfg.menu_backdrop);
+    Menu m;
+    m.bind(cfg);
+    open_category(m, "EXTRAS");
+    CHECK(select_row(m, "MENU FONT"));
+    CHECK(m.on_key(SDLK_RIGHT));
+    CHECK(!cfg.menu_game_font);
+    CHECK(select_row(m, "MENU BACKGROUND"));
+    CHECK(m.on_key(SDLK_LEFT));
+    CHECK(!cfg.menu_backdrop);
+
+    const std::string path = "menu_look_test.ini";
+    CHECK(cfg.save(path));
+    Config back;
+    CHECK(back.load(path));
+    CHECK(!back.menu_game_font);
+    CHECK(!back.menu_backdrop);
+    std::remove(path.c_str());
+}
+
+namespace {
+
+// A stand-in for the ROM's font: every glyph a block of colour 1 (white)
+// with a clear left column.
+GameFont block_font() {
+    std::vector<uint8_t> tiles(size_t(kGameFontTileCount) * 32);
+    for (size_t r = 0; r < tiles.size() / 4; ++r) {
+        tiles[r * 4] = 0x01;
+        tiles[r * 4 + 1] = tiles[r * 4 + 2] = tiles[r * 4 + 3] = 0x11;
+    }
+    std::array<uint16_t, 16> palette{};
+    palette[1] = 0x0EEE;
+    GameFont f;
+    std::string why;
+    CHECK(game_font_from_tiles(tiles, palette, f, &why));
+    return f;
+}
+
+} // namespace
+
+TEST(menu, the_game_font_lays_out_in_whole_cells) {
+    Drawn d;
+    CHECK(d.ok);
+    if (!d.ok) return;
+    CHECK(d.g.set_game_font(block_font()));
+    d.g.begin_frame();  // 1280x720: scale 1, the pixel face at 16 and 32
+    const float pixel_width = d.g.text_width(ui::Font::Pixel, "AB");
+    d.g.enable_game_font(true);
+    CHECK(d.g.uses_game_font(ui::Font::Pixel, "BACK TO TITLE"));
+    CHECK(d.g.uses_game_font(ui::Font::Pixel, "Resume"));
+    CHECK(!d.g.uses_game_font(ui::Font::Pixel, "65%"));      // no '%': the pixel face
+    CHECK(!d.g.uses_game_font(ui::Font::Small, "AB"));       // captions keep their face
+    CHECK_EQ(int(d.g.text_width(ui::Font::Pixel, "AB")), 16);     // 8 a character
+    CHECK_EQ(int(d.g.text_width(ui::Font::PixelBig, "AB")), 32);  // twice that
+    CHECK_EQ(int(d.g.line_height(ui::Font::Pixel)), 16);
+    CHECK_EQ(int(d.g.line_height(ui::Font::PixelBig)), 32);
+    CHECK_EQ(ui::game_font_scale(24), 2);  // 1080p's pixel face
+    CHECK_EQ(ui::game_font_scale(8), 1);
+    CHECK_EQ(ui::game_font_scale(48), 3);
+    d.g.enable_game_font(false);
+    CHECK_EQ(d.g.text_width(ui::Font::Pixel, "AB"), pixel_width);
+
+    // Drawn at a fractional position, a glyph still lands on whole pixels in
+    // its own colour: nothing in between, and the clear column stays clear.
+    d.g.enable_game_font(true);
+    SDL_SetRenderDrawColor(d.renderer, 0, 0, 0, 255);
+    SDL_RenderClear(d.renderer);
+    d.g.text(ui::Font::PixelBig, 100.4f, 100.3f, "A", ui::theme::text);
+    SDL_RenderPresent(d.renderer);
+    SDL_Surface* s = SDL_RenderReadPixels(d.renderer, nullptr);
+    CHECK(s != nullptr);
+    if (!s) return;
+    SDL_Surface* c = SDL_ConvertSurface(s, SDL_PIXELFORMAT_XRGB8888);
+    SDL_DestroySurface(s);
+    if (!c) return;
+    auto at = [c](int x, int y) {
+        return static_cast<const uint32_t*>(c->pixels)[size_t(y) * size_t(c->pitch / 4) + size_t(x)] & 0xFFFFFF;
+    };
+    int lit = 0, other = 0;
+    for (int y = 96; y < 140; ++y)
+        for (int x = 96; x < 120; ++x) {
+            const uint32_t p = at(x, y);
+            if (p == 0xFFFFFF) ++lit;
+            else if (p != 0) ++other;
+        }
+    CHECK_EQ(lit, 14 * 32);  // seven columns of the glyph, doubled, 32 lines
+    CHECK_EQ(other, 0);
+    CHECK_EQ(at(100, 110), 0u);       // the clear column, two pixels wide
+    CHECK_EQ(at(101, 110), 0u);
+    CHECK_EQ(at(102, 110), 0xFFFFFFu);
+    SDL_DestroySurface(c);
+}
+
+TEST(menu, a_zone_picture_fills_the_panel_when_asked) {
+    Drawn d;
+    CHECK(d.ok);
+    if (!d.ok) return;
+    Config cfg;
+    cfg.set_defaults();
+    Menu m;
+    m.bind(cfg);
+    // A plain red "zone", under a black tint.
+    SDL_Texture* red = SDL_CreateTexture(d.renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STATIC, 4, 4);
+    CHECK(red != nullptr);
+    if (!red) return;
+    std::vector<uint32_t> px(16, 0xFF0000);
+    SDL_UpdateTexture(red, nullptr, px.data(), 16);
+    m.set_backdrop(red, 4, 4, ui::Color{0, 0, 0, 255}, ui::Color{0, 255, 0, 255});
+    open_options(m);
+    auto panel_red = [&] {
+        SDL_SetRenderDrawColor(d.renderer, 0, 0, 0, 255);
+        SDL_RenderClear(d.renderer);
+        d.draw(m);
+        SDL_RenderPresent(d.renderer);
+        SDL_Surface* s = SDL_RenderReadPixels(d.renderer, nullptr);
+        if (!s) return -1;
+        SDL_Surface* c = SDL_ConvertSurface(s, SDL_PIXELFORMAT_XRGB8888);
+        SDL_DestroySurface(s);
+        if (!c) return -1;
+        // Inside the panel, right of its labels: only the panel's fill.
+        const uint32_t p = static_cast<const uint32_t*>(c->pixels)[size_t(360) * size_t(c->pitch / 4) + 930];
+        SDL_DestroySurface(c);
+        return int((p >> 16) & 0xFF);
+    };
+    const int zone = panel_red();
+    cfg.menu_backdrop = false;
+    const int plain = panel_red();
+    CHECK(zone > 30);    // the red shows through the tint
+    CHECK(plain < 30);   // the theme's near-black
+    SDL_DestroyTexture(red);
 }

@@ -492,6 +492,17 @@ void Menu::build_extras() {
         mods.pressed = true;
         items_.push_back(std::move(mods));
     }
+    // Issue #8: this menu's own look. Both are made from the ROM, so they are
+    // the game's rather than ours; PIXEL and PLAIN are the earlier look. Here
+    // rather than under VIDEO, which is as long as a phone's screen allows.
+    items_.push_back({"MENU FONT",
+                      [c] { return std::string(c->menu_game_font ? "GAME" : "PIXEL"); },
+                      [c](int s) { if (s) c->menu_game_font = !c->menu_game_font; },
+                      "the game's own letters"});
+    items_.push_back({"MENU BACKGROUND",
+                      [c] { return std::string(c->menu_backdrop ? "ZONE" : "PLAIN"); },
+                      [c](int s) { if (s) c->menu_backdrop = !c->menu_backdrop; },
+                      "the game's zones behind it"});
     items_.push_back({"DUMP GRAPHICS",
                       [c] { return on_off(c->dump_graphics); },
                       [c](int s) { if (s) c->dump_graphics = !c->dump_graphics; },
@@ -720,14 +731,43 @@ bool Menu::art_panel(ui::Ui& g, SDL_FRect* out) const {
     return true;
 }
 
+void Menu::set_backdrop(SDL_Texture* texture, float width, float height, ui::Color tint, ui::Color accent) {
+    backdrop_ = texture;
+    backdrop_w_ = width;
+    backdrop_h_ = height;
+    zone_tint_ = tint;
+    zone_accent_ = accent;
+}
+
+bool Menu::backdrop_on() const { return backdrop_ && cfg_ && cfg_->menu_backdrop; }
+
+void Menu::fill(ui::Ui& g, const SDL_FRect& r, ui::Color plain, uint8_t tint_alpha) const {
+    if (!backdrop_on()) {
+        g.rect(r, plain);
+        return;
+    }
+    // The zone's picture, then its own colour over it: translucent enough to
+    // show the place, dark enough that white and yellow letters stay clear.
+    g.image_cover(backdrop_, backdrop_w_, backdrop_h_, r);
+    g.rect(r, zone_tint_.alpha(tint_alpha));
+}
+
 void Menu::draw(ui::Ui& g, achievements::Tracker& ach) {
     if (!open()) return;
     hits_.clear();
     anim_ += 0.08f;
+    // The game's letters are the menu's only: the touch controls and the
+    // notifications keep the pixel face.
+    g.enable_game_font(cfg_ && cfg_->menu_game_font);
 
     // Dim the game rather than cover it: the characters on the title screen
-    // are the backdrop.
-    g.rect({0, 0, g.width(), g.height()}, ui::theme::background.alpha(150));
+    // are the backdrop. On the front end with a zone's picture, only the
+    // title's panel is dimmed, as before; the picture has its own tint.
+    SDL_FRect art{};
+    if (page_ == Page::Front && backdrop_on() && art_panel(g, &art))
+        g.rect(art, ui::theme::background.alpha(150));
+    else
+        g.rect({0, 0, g.width(), g.height()}, ui::theme::background.alpha(150));
 
     if (page_ == Page::Front)
         draw_front(g);
@@ -737,11 +777,14 @@ void Menu::draw(ui::Ui& g, achievements::Tracker& ach) {
         draw_options(g);
     else
         draw_achievements(g, ach);
+    g.enable_game_font(false);
 }
 
 // A vertical list down the right-hand side, beside the art panel.
 void Menu::draw_backdrop_dim(ui::Ui& g) const {
-    g.rect({0, 0, g.width(), g.height()}, ui::theme::background.alpha(226));
+    // With a zone picture the title is still drawn in its panel, so the
+    // window around it can be the picture instead of a darkened copy.
+    fill(g, {0, 0, g.width(), g.height()}, ui::theme::background.alpha(226), 185);
 }
 
 void Menu::draw_front(ui::Ui& g) {
@@ -751,7 +794,7 @@ void Menu::draw_front(ui::Ui& g) {
     // A frame around the game's image, so it reads as a picture rather than
     // as the game running underneath.
     g.outline({art.x - g.px(3), art.y - g.px(3), art.w + g.px(6), art.h + g.px(6)},
-              ui::theme::accent, g.px(3), g.px(3));
+              accent(), g.px(3), g.px(3));
 
     const float left = art.x + art.w + g.px(40);
     const float right = g.width() - g.px(28);
@@ -764,7 +807,7 @@ void Menu::draw_front(ui::Ui& g) {
 
     g.text(ui::Font::Pixel, left, y, "KNUCKLES", ui::theme::text_dim);
     y += g.line_height(ui::Font::Pixel) + g.px(2);
-    g.text(ui::Font::PixelBig, left, y, "CHAOTIX", ui::theme::accent);
+    g.text(ui::Font::PixelBig, left, y, "CHAOTIX", accent());
     y += title_h;
 
     for (size_t i = 0; i < items_.size(); ++i) {
@@ -776,7 +819,7 @@ void Menu::draw_front(ui::Ui& g) {
             const float bob = std::sin(anim_ * 3.0f) * g.px(2);
             g.rect({left - g.px(12), y - g.px(6), std::min(column, w + g.px(36)),
                     g.line_height(ui::Font::PixelBig) + g.px(12)},
-                   ui::theme::accent_dim, g.px(4));
+                   backdrop_on() ? zone_accent_.alpha(80) : ui::theme::accent_dim, g.px(4));
             g.text(ui::Font::PixelBig, left + bob, y, items_[i].label, ui::theme::text);
         } else {
             g.text(ui::Font::PixelBig, left, y, items_[i].label, ui::theme::text_faint);
@@ -786,7 +829,7 @@ void Menu::draw_front(ui::Ui& g) {
     }
 
     g.text(ui::Font::Small, left, g.height() - g.px(26),
-           "Up/Down choose    Enter select", ui::theme::text_faint);
+           "Up/Down choose    Enter select", faint());
 }
 
 void Menu::draw_row_page(ui::Ui& g, const char* hint) {
@@ -796,11 +839,12 @@ void Menu::draw_row_page(ui::Ui& g, const char* hint) {
     // so the art above it stays visible.
     const float band_h = g.px(26) + item_h + g.px(14) + hint_h + g.px(16);
     const float band_y = g.height() - band_h - g.px(24);
-    // Solid: the title screen behind it is bright, and a bar across the
-    // bottom is what these menus looked like anyway.
-    g.rect({0, band_y, g.width(), band_h}, ui::theme::background);
-    g.rect({0, band_y, g.width(), g.px(3)}, ui::theme::accent);
-    g.rect({0, band_y + band_h - g.px(3), g.width(), g.px(3)}, ui::theme::accent);
+    // Solid, or a zone's picture under a heavy tint: the title screen behind
+    // it is bright, and a bar across the bottom is what these menus looked
+    // like anyway.
+    fill(g, {0, band_y, g.width(), band_h}, ui::theme::background, 205);
+    g.rect({0, band_y, g.width(), g.px(3)}, accent());
+    g.rect({0, band_y + band_h - g.px(3), g.width(), g.px(3)}, accent());
 
     // Measure first so the row can be centred as a whole.
     const float gap = g.px(34);
@@ -819,9 +863,9 @@ void Menu::draw_row_page(ui::Ui& g, const char* hint) {
             // The selected entry gets a marker that bobs, the way these menus
             // have always done it.
             const float bob = std::sin(anim_ * 3.0f) * g.px(2);
-            g.text(ui::Font::Pixel, x - g.px(24) + bob, y, ">", ui::theme::accent);
+            g.text(ui::Font::Pixel, x - g.px(24) + bob, y, ">", accent());
             g.text(ui::Font::Pixel, x, y, items_[i].label, ui::theme::text);
-            g.rect({x, y + item_h + g.px(4), w, g.px(3)}, ui::theme::accent);
+            g.rect({x, y + item_h + g.px(4), w, g.px(3)}, accent());
         } else {
             g.text(ui::Font::Pixel, x, y, items_[i].label, ui::theme::text_faint);
         }
@@ -830,7 +874,7 @@ void Menu::draw_row_page(ui::Ui& g, const char* hint) {
     }
 
     g.text(ui::Font::Small, (g.width() - g.text_width(ui::Font::Small, hint)) * 0.5f,
-           band_y + band_h - g.px(16) - hint_h, hint, ui::theme::text_faint);
+           band_y + band_h - g.px(16) - hint_h, hint, faint());
 }
 
 void Menu::draw_options(ui::Ui& g) {
@@ -862,8 +906,13 @@ void Menu::draw_options(ui::Ui& g) {
     float y = std::max(g.px(14), (g.height() - total) * 0.5f) + g.px(16);
     const float panel_top = y - g.px(16);
 
-    g.panel({x - pad, panel_top, column + pad * 2, total},
-            ui::theme::background.alpha(240), ui::theme::accent, g.px(4), g.px(3));
+    const SDL_FRect panel{x - pad, panel_top, column + pad * 2, total};
+    if (backdrop_on()) {
+        fill(g, panel, ui::theme::background, 205);
+        g.outline(panel, accent(), g.px(4), g.px(3));
+    } else {
+        g.panel(panel, ui::theme::background.alpha(240), accent(), g.px(4), g.px(3));
+    }
 
     const char* heading = page_ == Page::TimeAttack ? "TIME ATTACK"
                         : page_ == Page::Cheats ? "CHEATS"
@@ -876,7 +925,7 @@ void Menu::draw_options(ui::Ui& g) {
                               ? (keys_player_ == 0 ? (keys_pad_ ? "1P GAMEPAD" : "1P KEYBOARD")
                                                    : (keys_pad_ ? "2P GAMEPAD" : "2P KEYBOARD"))
                         : "OPTIONS";
-    g.text(ui::Font::PixelBig, x, y, heading, ui::theme::accent);
+    g.text(ui::Font::PixelBig, x, y, heading, accent());
     y += head_h;
 
     for (size_t i = 0; i < items_.size(); ++i) {
@@ -884,7 +933,7 @@ void Menu::draw_options(ui::Ui& g) {
         const Item& it = items_[i];
         if (sel) {
             const float bob = std::sin(anim_ * 3.0f) * g.px(2);
-            g.text(ui::Font::Pixel, x - g.px(24) + bob, y, ">", ui::theme::accent);
+            g.text(ui::Font::Pixel, x - g.px(24) + bob, y, ">", accent());
         }
         const float label_w = g.text(ui::Font::Pixel, x, y, it.label,
                                      sel ? ui::theme::text : ui::theme::text_dim);
@@ -892,7 +941,7 @@ void Menu::draw_options(ui::Ui& g) {
             // Smaller and dimmer than the label, on the same middle line, so
             // it reads as a caption rather than as a second entry.
             const float ny = y + (g.line_height(ui::Font::Pixel) - g.line_height(ui::Font::Small)) * 0.5f;
-            g.text(ui::Font::Small, x + label_w + g.px(16), ny, it.note, ui::theme::text_faint);
+            g.text(ui::Font::Small, x + label_w + g.px(16), ny, it.note, faint());
         }
         const float this_h = wrapped[i] ? row_h * 2 : row_h;
         Hit hit{{x - g.px(24), y - g.px(4), column + g.px(48), this_h}, int(i)};
@@ -905,14 +954,14 @@ void Menu::draw_options(ui::Ui& g) {
             const float vx = wrapped[i] ? x + g.px(16) : x + column - vw;
             const float room = wrapped[i] ? column - g.px(46) : column;
             g.text_fit(ui::Font::Pixel, vx, vy, room, v,
-                       sel ? ui::theme::accent : ui::theme::text_dim);
+                       sel ? accent() : ui::theme::text_dim);
             // Arrows only where left/right actually does something: on the
             // key page the value changes by capturing a press instead.
             if (sel && !it.pressed && !it.read_only) {
                 const float aw = wrapped[i] ? std::min(vw, room) : vw;
                 const float ax = wrapped[i] ? vx : x + column - vw;
-                g.text(ui::Font::Pixel, ax - g.px(22), vy, "<", ui::theme::accent);
-                g.text(ui::Font::Pixel, ax + aw + g.px(10), vy, ">", ui::theme::accent);
+                g.text(ui::Font::Pixel, ax - g.px(22), vy, "<", accent());
+                g.text(ui::Font::Pixel, ax + aw + g.px(10), vy, ">", accent());
             }
             // The "<" arrow's area, padded to a finger's width. It is taken
             // from where the arrow is drawn when the row is selected, so it
@@ -930,7 +979,7 @@ void Menu::draw_options(ui::Ui& g) {
     const char* hint = page_ == Page::Keys
                            ? "Up/Down choose    Enter rebind    Esc back"
                            : "Up/Down choose    Left/Right change    Esc back";
-    g.text(ui::Font::Small, x, y + g.px(8), hint, ui::theme::text_faint);
+    g.text(ui::Font::Small, x, y + g.px(8), hint, faint());
 }
 
 void Menu::draw_achievements(ui::Ui& g, achievements::Tracker& ach) {
@@ -938,8 +987,8 @@ void Menu::draw_achievements(ui::Ui& g, achievements::Tracker& ach) {
     const float x = (g.width() - column) * 0.5f;
     float y = std::max(g.px(18), g.height() * 0.05f);
 
-    g.rect({0, 0, g.width(), g.height()}, ui::theme::background.alpha(200));
-    g.text(ui::Font::PixelBig, x, y, "AWARDS", ui::theme::accent);
+    fill(g, {0, 0, g.width(), g.height()}, ui::theme::background.alpha(200), 210);
+    g.text(ui::Font::PixelBig, x, y, "AWARDS", accent());
     char head[96];
     std::snprintf(head, sizeof head, "%d OF %zu    %d / %d PTS", ach.unlocked_count(),
                   ach.list().size(), ach.points_earned(), ach.points_total());
@@ -951,7 +1000,7 @@ void Menu::draw_achievements(ui::Ui& g, achievements::Tracker& ach) {
     const int total = ach.points_total();
     const float done = total > 0 ? float(ach.points_earned()) / float(total) : 0.0f;
     g.rect({x, y, column, bar_h}, ui::theme::surface_raised);
-    if (done > 0) g.rect({x, y, column * done, bar_h}, ui::theme::accent);
+    if (done > 0) g.rect({x, y, column * done, bar_h}, accent());
     y += bar_h + g.px(14);
 
     const float row_h = g.line_height(ui::Font::Pixel) + g.line_height(ui::Font::Small) + g.px(16);
@@ -966,12 +1015,12 @@ void Menu::draw_achievements(ui::Ui& g, achievements::Tracker& ach) {
         const auto& a = all[size_t(i)];
         const SDL_FRect row{x, y, column, row_h};
         g.panel(row, a.unlocked ? ui::theme::surface_raised : ui::theme::surface,
-                a.unlocked ? ui::theme::accent : ui::theme::outline, g.px(4), a.unlocked ? 2.0f : 1.0f);
+                a.unlocked ? accent() : ui::theme::outline, g.px(4), a.unlocked ? 2.0f : 1.0f);
         char pts[16];
         std::snprintf(pts, sizeof pts, "%d", a.points);
         const float pw = g.text_width(ui::Font::Pixel, pts);
         g.text(ui::Font::Pixel, x + column - pw - g.px(12), y + g.px(8), pts,
-               a.unlocked ? ui::theme::accent : ui::theme::text_faint);
+               a.unlocked ? accent() : ui::theme::text_faint);
         const float tw = column - pw - g.px(32);
         g.text_fit(ui::Font::Pixel, x + g.px(12), y + g.px(6), tw, a.title,
                    a.unlocked ? ui::theme::text : ui::theme::text_dim);
@@ -980,7 +1029,7 @@ void Menu::draw_achievements(ui::Ui& g, achievements::Tracker& ach) {
         y += row_h + gap;
     }
     g.text(ui::Font::Small, x, g.height() - g.line_height(ui::Font::Small) - g.px(10),
-           "Up/Down scroll    Enter or Esc back", ui::theme::text_faint);
+           "Up/Down scroll    Enter or Esc back", faint());
 }
 
 } // namespace chaotix

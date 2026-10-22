@@ -83,6 +83,8 @@ bool Config::load(const std::string& path) {
             else if (k == "Widescreen") widescreen = parse_bool(v, widescreen);
             else if (k == "WidescreenEverywhere") wide_everywhere = parse_bool(v, wide_everywhere);
             else if (k == "WidescreenHud") wide_hud = parse_bool(v, wide_hud);
+            else if (k == "MenuFont") menu_game_font = !(v == "Pixel" || v == "pixel");
+            else if (k == "MenuBackground") menu_backdrop = !(v == "Plain" || v == "plain");
         } else if (section == "Cheats") {
             if (k == "Enabled") {
                 cheats.clear();
@@ -152,6 +154,10 @@ bool Config::save(const std::string& path) const {
     std::fprintf(f, "WidescreenEverywhere = %s\n", wide_everywhere ? "true" : "false");
     std::fprintf(f, "# true: in widescreen levels, the HUD keeps to the left edge of the picture\n");
     std::fprintf(f, "WidescreenHud = %s\n", wide_hud ? "true" : "false");
+    std::fprintf(f, "# The menu's font: Game (read from your ROM) | Pixel (the bundled pixel face)\n");
+    std::fprintf(f, "MenuFont = %s\n", menu_game_font ? "Game" : "Pixel");
+    std::fprintf(f, "# Behind the menu: Zone (pictures of the game's zones, made from your ROM) | Plain\n");
+    std::fprintf(f, "MenuBackground = %s\n", menu_backdrop ? "Zone" : "Plain");
     std::fprintf(f, "# Integer | Fit | Stretch\nScaling = %s\n", scale_name(viewport.scale));
     std::fprintf(f, "# Nearest | Linear\nFilter = %s\n", linear_filter ? "Linear" : "Nearest");
     std::fprintf(f, "# Windowed | Borderless | Fullscreen\nWindowMode = %s\n", window_mode_name(window_mode));

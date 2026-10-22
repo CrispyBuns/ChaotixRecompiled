@@ -6,6 +6,7 @@
 #include <cmath>
 #include <vector>
 
+#include "renderer/game_font.h"
 #include "runtime/log.h"
 
 namespace chaotix {
@@ -95,6 +96,7 @@ bool Ui::init(SDL_Renderer* renderer) {
         // A pixel face grid-fits to whole pixels or it turns to mush; the
         // text faces look better with light hinting.
         TTF_SetFontHinting(fonts_[i], is_pixel(f) ? TTF_HINTING_MONO : TTF_HINTING_LIGHT);
+        pixel_sizes_[i] = kSizes[i];
     }
     for (size_t i = 0; i < size_t(Font::Count_); ++i) {
         if (!fonts_[i]) { shutdown(); return false; }
@@ -104,6 +106,8 @@ bool Ui::init(SDL_Renderer* renderer) {
 
 void Ui::shutdown() {
     drop_cache();
+    if (game_tex_) SDL_DestroyTexture(game_tex_);
+    game_tex_ = nullptr;
     for (auto*& f : fonts_) {
         if (f) TTF_CloseFont(f);
         f = nullptr;
@@ -129,6 +133,7 @@ void Ui::set_sizes() {
         // so every glyph pixel lands on a screen pixel.
         if (is_pixel(Font(i))) size = std::max(8.0f, std::round(size / 8.0f) * 8.0f);
         TTF_SetFontSize(fonts_[i], size);
+        pixel_sizes_[i] = size;
     }
     drop_cache();  // the cached textures were rendered at the old size
 }
@@ -174,13 +179,87 @@ TTF_Text* Ui::acquire(Font f, const std::string& s) {
 }
 
 float Ui::line_height(Font f) const {
-    return fonts_[size_t(f)] ? float(TTF_GetFontHeight(fonts_[size_t(f)])) : 0.0f;
+    const float face = fonts_[size_t(f)] ? float(TTF_GetFontHeight(fonts_[size_t(f)])) : 0.0f;
+    // With the game's font, a line is tall enough for either, so a label in
+    // the pixel face sits in the same rows as the game's.
+    if (game_font_active() && is_pixel(f))
+        return std::max(face, float(GameFont::kGlyphH * game_scale(f)));
+    return face;
+}
+
+bool Ui::uses_game_font(Font f, const std::string& s) const {
+    if (!game_font_active() || !is_pixel(f) || s.empty()) return false;
+    for (unsigned char c : s)
+        if (c != ' ' && (c >= 128 || game_glyph_[c] < 0)) return false;
+    return true;
+}
+
+bool Ui::set_game_font(const GameFont& font) {
+    if (game_tex_) SDL_DestroyTexture(game_tex_);
+    game_tex_ = nullptr;
+    if (!renderer_ || font.empty()) return false;
+    game_tex_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, font.width,
+                                  font.height);
+    if (!game_tex_) {
+        LOGW("ui", "game font texture: %s", SDL_GetError());
+        return false;
+    }
+    SDL_UpdateTexture(game_tex_, nullptr, font.pixels.data(), font.width * 4);
+    SDL_SetTextureBlendMode(game_tex_, SDL_BLENDMODE_BLEND);
+    // Whole-number scales of a pixel font, so nearest neighbour keeps every
+    // pixel square.
+    SDL_SetTextureScaleMode(game_tex_, SDL_SCALEMODE_NEAREST);
+    game_glyph_ = font.glyph;
+    return true;
+}
+
+float Ui::game_text(Font f, float x, float y, const std::string& s, Color c) {
+    const int k = game_scale(f);
+    const float cw = float(GameFont::kGlyphW * k), ch = float(GameFont::kGlyphH * k);
+    // The game's colours are the point, so the colour asked for only sets
+    // how bright they are: full for the selected entry and headings, dimmer
+    // for the rest, as the pixel face's greys would have been.
+    const int bright = std::max({int(c.r), int(c.g), int(c.b)});
+    // Not below about two thirds: the shaded yellow turns muddy darker than
+    // that, and the marker already says which entry is chosen.
+    const Uint8 mod = Uint8(std::clamp(bright * 255 / int(theme::text.b), 170, 255));
+    SDL_SetTextureColorMod(game_tex_, mod, mod, mod);
+    SDL_SetTextureAlphaMod(game_tex_, c.a);
+    // Whole pixels, like the pixel face: a glyph between screen pixels would
+    // be sampled unevenly.
+    const float x0 = std::round(x), y0 = std::round(y + (line_height(f) - ch) * 0.5f);
+    for (size_t i = 0; i < s.size(); ++i) {
+        const unsigned char ch_ = static_cast<unsigned char>(s[i]);
+        if (ch_ == ' ') continue;
+        const int g = game_glyph_[ch_];
+        const SDL_FRect src{float(g * GameFont::kGlyphW), 0, float(GameFont::kGlyphW), float(GameFont::kGlyphH)};
+        const SDL_FRect dst{x0 + float(i) * cw, y0, cw, ch};
+        SDL_RenderTexture(renderer_, game_tex_, &src, &dst);
+    }
+    return float(s.size()) * cw;
+}
+
+void Ui::image_cover(SDL_Texture* tex, float tex_w, float tex_h, const SDL_FRect& r, uint8_t alpha) {
+    if (!tex || tex_w <= 0 || tex_h <= 0 || r.w <= 0 || r.h <= 0) return;
+    // The largest part of the picture with r's shape, centred.
+    SDL_FRect src{0, 0, tex_w, tex_h};
+    if (tex_w / tex_h > r.w / r.h) {
+        src.w = tex_h * r.w / r.h;
+        src.x = (tex_w - src.w) * 0.5f;
+    } else {
+        src.h = tex_w * r.h / r.w;
+        src.y = (tex_h - src.h) * 0.5f;
+    }
+    SDL_SetTextureAlphaMod(tex, alpha);
+    SDL_RenderTexture(renderer_, tex, &src, &r);
+    SDL_SetTextureAlphaMod(tex, 255);
 }
 
 float Ui::text_width(Font f, const std::string& s) {
     // Measured without creating a cached TTF_Text: shorten() below asks for
     // the width of every intermediate string, and caching those would fill
     // the cache with strings that are never drawn.
+    if (uses_game_font(f, s)) return float(s.size() * GameFont::kGlyphW * size_t(game_scale(f)));
     if (!fonts_[size_t(f)] || s.empty()) return 0;
     int w = 0, h = 0;
     if (!TTF_GetStringSize(fonts_[size_t(f)], s.c_str(), s.size(), &w, &h)) return 0;
@@ -188,9 +267,14 @@ float Ui::text_width(Font f, const std::string& s) {
 }
 
 float Ui::text(Font f, float x, float y, const std::string& s, Color c) {
+    if (uses_game_font(f, s)) return game_text(f, x, y, s, c);
     TTF_Text* t = acquire(f, s);
     if (!t) return 0;
     TTF_SetTextColor(t, c.r, c.g, c.b, c.a);
+    // A pixel-face string among the game font's lines is centred in the
+    // taller line, so both sit on the same middle.
+    if (game_font_active() && is_pixel(f) && fonts_[size_t(f)])
+        y += (line_height(f) - float(TTF_GetFontHeight(fonts_[size_t(f)]))) * 0.5f;
     // Whole pixels only: at a fractional position the glyphs are sampled
     // between texels, which blurs the pixel face and picks up thin lines
     // from the neighbouring glyphs in the atlas (issue #5).

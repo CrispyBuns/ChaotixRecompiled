@@ -68,9 +68,11 @@ add_library(chaotix_runtime STATIC
     src/renderer/tile_pack.cpp
     src/renderer/sprite_pack.cpp
     src/renderer/sprite_sheet.cpp
+    src/renderer/game_font.cpp
     src/renderer/viewport.cpp
     src/frontend/setup.cpp
     src/frontend/time_attack.cpp
+    src/frontend/backdrop.cpp
     src/input/input.cpp
     src/input/touch_controls.cpp
 )
@@ -196,6 +198,7 @@ if(CHAOTIX_BUILD_FRONTEND)
         src/platform/sdl_rom_import.cpp
         src/platform/menu.cpp
         src/platform/ui.cpp
+        src/platform/backdrops.cpp
         src/frontend/config.cpp
         src/frontend/debug_overlay.cpp
         ${_embedded}
@@ -222,7 +225,9 @@ if(CHAOTIX_BUILD_FRONTEND)
             set_target_properties(chaotix PROPERTIES BUILD_RPATH "\$ORIGIN" INSTALL_RPATH "\$ORIGIN")
         endif()
     endif()
-    target_link_libraries(chaotix PRIVATE chaotix_game SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+    # The menu's zone pictures are made on a thread of their own (issue #8).
+    find_package(Threads REQUIRED)
+    target_link_libraries(chaotix PRIVATE chaotix_game SDL3::SDL3 SDL3_ttf::SDL3_ttf Threads::Threads)
     chaotix_set_warnings(chaotix)
     if(APPLE)
         # The bundle's Info.plist; scripts/package_apple.sh adds the icon,

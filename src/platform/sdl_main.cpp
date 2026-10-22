@@ -17,6 +17,7 @@
 #include "frontend/debug_overlay.h"
 #include "frontend/setup.h"
 #include "platform/sdl_setup.h"
+#include "platform/backdrops.h"
 #include "platform/frame_pacing.h"
 #include "platform/menu.h"
 #include "platform/ui.h"
@@ -25,6 +26,7 @@
 #include "game/recomp_dispatch.h"
 #include "input/input.h"
 #include "input/touch_controls.h"
+#include "renderer/game_font.h"
 #include "renderer/sprite_pack.h"
 #include "renderer/sprite_sheet.h"
 #include "renderer/tile_pack.h"
@@ -128,6 +130,9 @@ struct App {
     ui::Ui ui;
     bool achievements_on = false;
     Menu menu;
+    // Pictures of the game's zones behind the menu (issue #8), made on a
+    // machine of their own and cached in the user data folder.
+    MenuBackdrops backdrops;
     int inject_start = 0;   // frames of Start to hand the game on the way out
     // A stage the front end asked for is taken at the game's mode dispatcher,
     // which the title screen only reaches once it is done with itself: one
@@ -1348,6 +1353,25 @@ int main(int argc, char** argv) {
     if (!app.autotest_frames || !app.mods_dir.empty()) {  // autotests are hermetic unless asked
         load_mods(app);
     }
+    // Issue #8: the menu's art comes from the ROM being played, after any
+    // patches: its font now (a millisecond), its zone pictures from the cache
+    // or, the first time, from a machine of their own in the background.
+    if (app.ui.ready()) {
+        GameFont font;
+        std::string why;
+        if (build_game_font(app.m->rom.data, font, &why)) app.ui.set_game_font(font);
+        else LOGW("menu", "the game's font: %s; the menu keeps the pixel face", why.c_str());
+    }
+    app.backdrops.configure(app.m->rom, app.store.root() + "Cache/Backdrops/");
+    if (app.autotest_frames && app.cfg.menu_backdrop && app.ui.ready()) {
+        // A screenshot of the menu should show what a player sees once the
+        // picture exists, not the plain look of the first seconds.
+        const Uint64 give_up = SDL_GetTicks() + 60000;
+        while (app.backdrops.ready_count() == 0 && SDL_GetTicks() < give_up) {
+            app.backdrops.update(app.renderer, true);
+            SDL_Delay(20);
+        }
+    }
 
     if (app.cfg.achievements) {
         // A file in the user data directory (or beside the executable) wins,
@@ -1407,6 +1431,8 @@ int main(int argc, char** argv) {
     while (app.running) {
         // The menu is where settings change: keep them the moment it closes.
         if (menu_was_open && !app.menu.open()) save_now(app);
+        // Each time the menu opens it shows the next zone.
+        if (!menu_was_open && app.menu.open()) app.backdrops.advance();
         menu_was_open = app.menu.open();
         // Wait before polling input so it is fresh when the frame is run.
         // Rendering an unchanged frame here can block in VSync and leave the
@@ -1632,6 +1658,17 @@ int main(int argc, char** argv) {
         if (app.ui.ready()) {
             app.ui.begin_frame();
             panelled = app.menu.art_panel(app.ui, &art);
+            app.backdrops.update(app.renderer, app.cfg.menu_backdrop);
+            MenuBackdrops::Shown zone;
+            if (app.backdrops.current(zone)) {
+                auto colour = [](uint32_t argb, uint8_t a) {
+                    return ui::Color{uint8_t(argb >> 16), uint8_t(argb >> 8), uint8_t(argb), a};
+                };
+                app.menu.set_backdrop(zone.texture, zone.width, zone.height, colour(zone.tint, 255),
+                                      colour(zone.accent, 255));
+            } else {
+                app.menu.clear_backdrop();
+            }
         }
         // With a panel the picture is drawn twice: once filling the window as
         // a backdrop, which the menu then dims, and once in the panel itself.
@@ -1714,6 +1751,9 @@ int main(int argc, char** argv) {
     if (!app.record_path.empty()) write_recording(app, app.record_path);
     if (app.audio) SDL_DestroyAudioStream(app.audio);
     for (SDL_Gamepad* g : app.pads) SDL_CloseGamepad(g);
+    // The picture worker is stopped and its textures freed while the
+    // renderer they belong to still exists.
+    app.backdrops.shutdown();
     SDL_DestroyTexture(app.texture);
     SDL_DestroyRenderer(app.renderer);
     SDL_DestroyWindow(app.window);

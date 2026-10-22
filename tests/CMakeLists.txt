@@ -23,8 +23,10 @@ add_executable(chaotix_tests
     test_sprite_replace.cpp
     test_sprite_sheet.cpp
     test_character_mods.cpp
+    test_game_font.cpp
 )
-target_link_libraries(chaotix_tests PRIVATE chaotix_game chaotix_runtime)
+find_package(Threads REQUIRED)  # test_game_font plays beside a backdrop thread
+target_link_libraries(chaotix_tests PRIVATE chaotix_game chaotix_runtime Threads::Threads)
 
 # The in-game menu is part of the frontend, so its test only exists where SDL
 # is available. It drives the menu with key presses; nothing is drawn.

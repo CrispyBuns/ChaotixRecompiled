@@ -22,7 +22,9 @@
 #include "runtime/sprite_record.h"
 #include "runtime/sprite_replace.h"
 #include "runtime/tile_replace.h"
+#include "frontend/backdrop.h"
 #include "frontend/time_attack.h"
+#include "renderer/game_font.h"
 #include "runtime/system.h"
 #include <chrono>
 #include <cstdio>
@@ -345,6 +347,9 @@ int main(int argc, char** argv) {
     int debug_layer = 0;
     std::string tiles_dir, dump_tiles_dir;
     std::string export_sheets_dir;  // --export-sheets DIR: every frame of each bank, after the run
+    // Issue #8, the menu's art: --backdrop KEY|all DIR renders menu backdrops
+    // (frontend/backdrop.h) as PNGs; --game-font PNG writes the font atlas.
+    std::string backdrop_key, backdrop_dir, game_font_png;
     std::vector<std::string> patch_files;  // --patch FILE: IPS/BPS applied to the ROM in memory
     std::string characters_dir;  // --characters DIR: character mods (runtime/character_mods.h)
     std::vector<cheats::Write> cheat_writes;  // --cheat, set before every frame
@@ -478,6 +483,8 @@ int main(int argc, char** argv) {
         // banks from the ROM, and the banks the scene has loaded at the end of
         // the run.
         else if (a == "--export-sheets") export_sheets_dir = next();
+        else if (a == "--backdrop") { backdrop_key = next(); backdrop_dir = next(); }
+        else if (a == "--game-font") game_font_png = next();
         else if (a == "--layer") debug_layer = next() == "md" ? 1 : 2;  // md | 32x: one layer in the shots
         else if (a == "--sprites") want_sprites = true;
         else if (a == "--sprites-check") want_sprites = sprites_check = true;
@@ -631,6 +638,46 @@ int main(int argc, char** argv) {
         std::printf("characters: %zu file(s), stats changed %d byte(s), %s\n", character_mods.size(), changed,
                     character_palettes ? "colours replaced" : "no colours");
         m->characters = character_palettes;
+    }
+    if (!game_font_png.empty()) {
+        GameFont font;
+        std::string why;
+        if (!build_game_font(m->rom.data, font, &why)) { std::printf("game font: %s\n", why.c_str()); return 1; }
+        std::printf("game font: %d glyphs of %dx%d\n", font.glyph_count, GameFont::kGlyphW, GameFont::kGlyphH);
+        if (!write_png(game_font_png, font.pixels.data(), font.width, font.height, font.width)) return 1;
+        if (backdrop_key.empty()) return 0;
+    }
+    if (!backdrop_key.empty()) {
+        int failed = 0;
+        // PLACE:LEVEL:TIME[:WIDE] tries a stage that is not one of the list.
+        std::vector<BackdropSpec> specs = backdrop_specs();
+        std::string custom_key;
+        if (backdrop_key.find(':') != std::string::npos) {
+            const auto parts = split(backdrop_key, ':');
+            BackdropSpec s;
+            s.place = uint16_t(std::atoi(parts[0].c_str()));
+            s.level = parts.size() > 1 ? uint16_t(std::atoi(parts[1].c_str())) : 1;
+            s.attime = parts.size() > 2 ? uint16_t(std::atoi(parts[2].c_str())) : 0;
+            s.wide = parts.size() > 3 ? std::atoi(parts[3].c_str()) != 0 : true;
+            custom_key = "custom_" + parts[0] + "_" + std::to_string(s.level) + "_" + std::to_string(s.attime);
+            s.key = custom_key.c_str();
+            specs = {s};
+            backdrop_key = "all";
+        }
+        for (const BackdropSpec& spec : specs) {
+            if (backdrop_key != "all" && backdrop_key != spec.key) continue;
+            BackdropImage img;
+            std::string why;
+            const auto t0 = std::chrono::steady_clock::now();
+            const bool ok = render_backdrop(m->rom, spec, img, &why);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            if (!ok) { std::printf("backdrop %s: %s\n", spec.key, why.c_str()); ++failed; continue; }
+            const std::string path = backdrop_dir + "/" + spec.key + ".png";
+            write_png(path, img.pixels.data(), img.width, img.height, img.width);
+            std::printf("backdrop %s: %dx%d in %.0f ms, tint %08X -> %s\n", spec.key, img.width, img.height, ms,
+                        unsigned(backdrop_tint(img)), path.c_str());
+        }
+        return failed ? 1 : 0;
     }
     // The same data patch on another machine, so that it runs the same game.
     auto same_rom = [&](Machine& o) {

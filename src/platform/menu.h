@@ -84,8 +84,16 @@ public:
     // The front end shows the game beside the list rather than behind it, so
     // it says where the image goes. Returns false to fill the window as usual.
     bool art_panel(ui::Ui& g, SDL_FRect* out) const;
-    // Damps the full-window backdrop before the panel is drawn over it.
+    // Damps the full-window backdrop before the panel is drawn over it, or
+    // with MENU BACKGROUND on ZONE puts the zone's picture there instead.
     void draw_backdrop_dim(ui::Ui& g) const;
+    // Issue #8: a picture of one of the game's zones (platform/backdrops.h)
+    // for the menu's panels and backgrounds, with the translucent colour laid
+    // over it and the colour for frames and markers, both taken from it. The
+    // menu uses it while MENU BACKGROUND is ZONE; without one it keeps its
+    // plain colours. The texture must outlive its use.
+    void set_backdrop(SDL_Texture* texture, float width, float height, ui::Color tint, ui::Color accent);
+    void clear_backdrop() { backdrop_ = nullptr; }
 
 private:
     // OPTIONS is a list of categories; each category is a page of its own, so
@@ -139,6 +147,18 @@ private:
     void draw_options(ui::Ui& g);
     std::vector<std::string> device_choices() const;
     void draw_achievements(ui::Ui& g, achievements::Tracker& ach);
+    bool backdrop_on() const;
+    // The theme's blue, or the zone's colour while its picture is shown.
+    ui::Color accent() const { return backdrop_on() ? zone_accent_ : ui::theme::accent; }
+    // Captions and hints: a step brighter over a picture than over plain dark.
+    ui::Color faint() const { return backdrop_on() ? ui::theme::text_dim : ui::theme::text_faint; }
+    // Fills r with the zone's picture under its tint (or `plain` without
+    // one), as the panels and bands are filled.
+    void fill(ui::Ui& g, const SDL_FRect& r, ui::Color plain, uint8_t tint_alpha) const;
+
+    SDL_Texture* backdrop_ = nullptr;
+    float backdrop_w_ = 0, backdrop_h_ = 0;
+    ui::Color zone_tint_{}, zone_accent_{};
 
     Hooks hooks_;
     Config* cfg_ = nullptr;

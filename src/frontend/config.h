@@ -30,6 +30,11 @@ struct Config {
     bool wide_everywhere = false;
     // In widened levels, the HUD at the picture's left edge (issue #28).
     bool wide_hud = true;
+    // Issue #8: the menu's labels in the game's own font (read from the ROM)
+    // rather than the bundled pixel face, and pictures of the game's zones
+    // (rendered from the ROM and cached) behind it rather than plain colour.
+    bool menu_game_font = true;
+    bool menu_backdrop = true;
     bool achievements = true;  // local achievement tracking (assets/achievements.ini)
     // Write each graphic drawn (Mega Drive tiles, 32X sprites) to
     // Mods/Textures/Dump (issue #35).
