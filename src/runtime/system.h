@@ -25,6 +25,7 @@
 namespace chaotix {
 
 class SpriteRecorder;
+class CharacterPalettes;
 
 constexpr int kMclkPerLine = 3420;
 constexpr int kLinesPerFrameNTSC = 262;
@@ -208,6 +209,10 @@ public:
     // shows. Output only, like the tile replacer: its SH-2 hooks write
     // nothing the machine sees. Copies of a machine share it.
     std::shared_ptr<SpriteRecorder> sprites;
+    // Character mods' colours (runtime/character_mods.h): the 32X palette
+    // render_line32x shows, with modded characters' entries substituted.
+    // Output only: CRAM itself is never changed. Copies of a machine share it.
+    std::shared_ptr<CharacterPalettes> characters;
 
     // Components
     Rom rom;

@@ -9,6 +9,7 @@
 // Zero is an ordinary displayed pixel: pal[0] in indexed modes, black in
 // direct colour. Zero-byte suppression applies only to overwrite-image writes.
 #include "runtime/system.h"
+#include "runtime/character_mods.h"
 #include "runtime/patches.h"
 #include "runtime/sprite_record.h"
 
@@ -44,6 +45,9 @@ void Machine::render_line32x(int ln, uint32_t* all, int extra, bool wide_src) {
     // composed again with them, shown in place of the emulated buffer and
     // its margins. Only what is shown; the machine keeps its own buffers.
     if (sprites) sprites->shown(*this, fb, shadow);
+    // Character mods' colours (runtime/character_mods.h): a copy of the
+    // palette with their entries substituted, likewise only for the picture.
+    const uint16_t* pal = characters ? characters->display(mars.pal, sdram + CharacterPalettes::kOffsetBytes) : mars.pal;
     // Widescreen rows above/below the active area are not in the line table;
     // the level frame buffer is a uniform grid, so extrapolate from the edge.
     const int lt = ln < 0 ? 0 : (ln >= kActiveLines ? kActiveLines - 1 : ln);
@@ -56,12 +60,12 @@ void Machine::render_line32x(int ln, uint32_t* all, int extra, bool wide_src) {
         if (wide_src) {
             // Margins come from the host-side shadow (see Machine::fb_margin).
             const uint8_t* sh = shadow;
-            for (int x = -extra; x < 0; ++x) all[x + extra] = encode_idx(sh[(p + uint32_t(x)) & 0x1FFFF], mars.pal, pri);
-            for (int x = kNativeWidth; x < kNativeWidth + extra; ++x) all[x + extra] = encode_idx(sh[(p + uint32_t(x)) & 0x1FFFF], mars.pal, pri);
+            for (int x = -extra; x < 0; ++x) all[x + extra] = encode_idx(sh[(p + uint32_t(x)) & 0x1FFFF], pal, pri);
+            for (int x = kNativeWidth; x < kNativeWidth + extra; ++x) all[x + extra] = encode_idx(sh[(p + uint32_t(x)) & 0x1FFFF], pal, pri);
         }
         // Extended rows are entirely redirected to the shadow by the blitter.
         const uint8_t* center = wide_src && (ln < 0 || ln >= kActiveLines) ? shadow : fb;
-        for (int x = 0; x < kNativeWidth; ++x) out[x] = encode_idx(center[(p + uint32_t(x)) & 0x1FFFF], mars.pal, pri);
+        for (int x = 0; x < kNativeWidth; ++x) out[x] = encode_idx(center[(p + uint32_t(x)) & 0x1FFFF], pal, pri);
         break;
     }
     case 2: {  // direct colour, 15 bpp
@@ -79,7 +83,7 @@ void Machine::render_line32x(int ln, uint32_t* all, int extra, bool wide_src) {
             uint32_t len = fb[o & 0x1FFFF] + 1u;
             uint8_t idx = fb[(o + 1) & 0x1FFFF];
             o += 2;
-            uint32_t px = encode_idx(idx, mars.pal, pri);
+            uint32_t px = encode_idx(idx, pal, pri);
             for (uint32_t i = 0; i < len && x < kNativeWidth; ++i) out[x++] = px;
         }
         break;

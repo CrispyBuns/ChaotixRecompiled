@@ -22,6 +22,7 @@ add_executable(chaotix_tests
     test_sprite_record.cpp
     test_sprite_replace.cpp
     test_sprite_sheet.cpp
+    test_character_mods.cpp
 )
 target_link_libraries(chaotix_tests PRIVATE chaotix_game chaotix_runtime)
 
@@ -83,6 +84,13 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_sprite_sheets.py"
                     $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
         set_tests_properties(sprite_sheets PROPERTIES TIMEOUT 1800)
+        # Character mods (Mods/Characters): colours the ROM's own change no
+        # picture, another character's change only its pixels, stats change
+        # movement; lockstep holds and the 68K stays native throughout.
+        add_test(NAME character_mods
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_character_mods.py"
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
+        set_tests_properties(character_mods PROPERTIES TIMEOUT 1800)
     endif()
     # Boot -> title -> menus -> DATA LOAD -> level, with gameplay input.
     set(_script

@@ -14,6 +14,7 @@
 #include "game/recomp_dispatch.h"
 #include "renderer/image_io.h"
 #include "runtime/log.h"
+#include "runtime/character_mods.h"
 #include "renderer/sprite_pack.h"
 #include "renderer/sprite_sheet.h"
 #include "renderer/tile_pack.h"
@@ -345,6 +346,7 @@ int main(int argc, char** argv) {
     std::string tiles_dir, dump_tiles_dir;
     std::string export_sheets_dir;  // --export-sheets DIR: every frame of each bank, after the run
     std::vector<std::string> patch_files;  // --patch FILE: IPS/BPS applied to the ROM in memory
+    std::string characters_dir;  // --characters DIR: character mods (runtime/character_mods.h)
     std::vector<cheats::Write> cheat_writes;  // --cheat, set before every frame
     uint64_t wide_live_frames = 0;
     int wide_stretches = 0;
@@ -359,6 +361,8 @@ int main(int argc, char** argv) {
     std::string wav_path;
     struct Poke { uint64_t frame; uint32_t addr; uint8_t value; };
     std::vector<Poke> pokes;
+    struct Peek { uint64_t every; uint32_t addr; uint32_t bytes; };
+    std::vector<Peek> peeks;
     std::string music_dir;  // --music-dir: music replaced by files (audio/music_mods.h)
     std::string coverage_path;
     int break_cpu = -1;
@@ -463,6 +467,8 @@ int main(int argc, char** argv) {
         else if (a == "--wide-everywhere") wide_everywhere = true;
         else if (a == "--hud-edges") hud_edges = true;
         else if (a == "--patch") patch_files.push_back(next());
+        // Character mods: <name>.ini files with [Palette] and [Stats].
+        else if (a == "--characters") characters_dir = next();
         // Graphics replacements, as the frontend's Mods/Textures: Mega Drive
         // tiles (md_<hash>.png) and 32X sprites (32x_*.png) from DIR; and
         // the dump of both kinds drawn (--dump-tiles is its older name).
@@ -528,6 +534,16 @@ int main(int argc, char** argv) {
         else if (a == "--three-button") six_button = 0;
         else if (a == "--audio") { want_audio = true; }
         else if (a == "--sram") sram_path = next();
+        else if (a == "--peek-every") {
+            // N:ADDR:BYTES, ADDR in hex: prints those 68K work RAM bytes every
+            // N frames (tests measure what the game did, a player's speed say).
+            auto parts = split(next(), ':');
+            if (parts.size() < 3) { std::fprintf(stderr, "bad --peek-every\n"); return 2; }
+            Peek p{std::strtoull(parts[0].c_str(), nullptr, 10), uint32_t(std::strtoul(parts[1].c_str(), nullptr, 16) & 0xFFFF),
+                   uint32_t(std::strtoul(parts[2].c_str(), nullptr, 10))};
+            if (!p.every || !p.bytes || p.bytes > 64) { std::fprintf(stderr, "bad --peek-every\n"); return 2; }
+            peeks.push_back(p);
+        }
         else if (a == "--poke") {
             // FRAME:ADDR:BYTE, all but FRAME in hex: a 68K work RAM byte set
             // before that frame runs (tests reach states a script cannot).
@@ -600,6 +616,28 @@ int main(int argc, char** argv) {
         for (const auto& msg : messages) std::printf("patch: %s\n", msg.c_str());
         std::printf("patch: %d applied, %zu changed range(s)\n", applied, m->rom.patched.size());
     }
+    // Character mods: the stats are a data patch over the ROM (after the patch
+    // files), on every machine below that runs the same game; the colours are
+    // output only, one CharacterPalettes shared by them all.
+    std::vector<CharacterMod> character_mods;
+    std::shared_ptr<CharacterPalettes> character_palettes;
+    if (!characters_dir.empty()) {
+        std::vector<std::string> messages;
+        character_mods = load_character_mods(characters_dir, &messages);
+        const int changed = m->rom.apply_edits(stat_edits(m->rom, character_mods, &messages), &messages);
+        for (const auto& msg : messages) std::printf("characters: %s\n", msg.c_str());
+        character_palettes = std::make_shared<CharacterPalettes>(m->rom, character_mods);
+        if (character_palettes->empty()) character_palettes = nullptr;
+        std::printf("characters: %zu file(s), stats changed %d byte(s), %s\n", character_mods.size(), changed,
+                    character_palettes ? "colours replaced" : "no colours");
+        m->characters = character_palettes;
+    }
+    // The same data patch on another machine, so that it runs the same game.
+    auto same_rom = [&](Machine& o) {
+        if (!patch_files.empty()) o.rom.apply_patches(patch_files, nullptr);
+        if (!character_mods.empty()) o.rom.apply_edits(stat_edits(o.rom, character_mods, nullptr), nullptr);
+        o.characters = character_palettes;
+    };
     m->reset();
     m->audio_enabled = !wav_path.empty() || want_audio;
     m->profile = profile;
@@ -658,7 +696,7 @@ int main(int argc, char** argv) {
     if (lockstep) {
         ref = std::make_unique<Machine>();
         ref->load_rom(rom_path, &err);
-        if (!patch_files.empty()) ref->rom.apply_patches(patch_files, nullptr);
+        same_rom(*ref);
         ref->reset();
         ref->wide_enabled = wide > 0 || wide_bottom > 0 || wide_at > 0 || wide_at_bottom > 0;
         ref->wide_extra = wide;
@@ -691,7 +729,7 @@ int main(int argc, char** argv) {
     if (compare_native && (wide > 0 || wide_bottom > 0)) {
         nat = std::make_unique<Machine>();
         nat->load_rom(rom_path, &err);
-        if (!patch_files.empty()) nat->rom.apply_patches(patch_files, nullptr);
+        same_rom(*nat);
         nat->reset();
         centre_compare = true;
     }
@@ -1004,6 +1042,12 @@ int main(int argc, char** argv) {
             std::printf("hash %llu %016llx\n", (unsigned long long)m->frame_count,
                         (unsigned long long)image_hash(m->framebuffer, m->fb_width, m->fb_height, kScreenWidth));
         if (state_every && m->frame_count % state_every == 0) dump_state(*m);
+        for (const Peek& p : peeks)
+            if (m->frame_count % p.every == 0) {
+                std::printf("peek %llu %04X ", (unsigned long long)m->frame_count, unsigned(p.addr));
+                for (uint32_t i = 0; i < p.bytes; ++i) std::printf("%02X", m->wram[(p.addr + i) & 0xFFFF]);
+                std::printf("\n");
+            }
     }
     double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     std::printf("ran %llu frames in %.2fs (%.1f fps)\n", (unsigned long long)frames, secs, frames / secs);
@@ -1034,6 +1078,10 @@ int main(int argc, char** argv) {
     if (compare_native) std::printf("centre check: %llu widescreen frames with a 4:3 identical centre\n", (unsigned long long)centre_ok_frames);
     if (compare_native && centre_worst) std::printf("centre check: special stage frames differ along polygon edges by at most %d pixels\n", centre_worst);
     if (ref) std::printf("lockstep: %llu frames bit-identical between interpreter and recompiled execution\n", (unsigned long long)lockstep_ok_frames);
+    if (character_palettes)
+        std::printf("characters: displayed palette worked out %llu times (%llu blocks left as they were), %d colour block(s) replaced at the end\n",
+                    (unsigned long long)character_palettes->recomputed(), (unsigned long long)character_palettes->refused(),
+                    character_palettes->substituted());
     if (m->sprites) {
         const SpriteRecorder& sr = *m->sprites;
         std::printf("sprites: %llu draws recorded (%llu not in the bank table, %llu unreadable), %llu flips\n",

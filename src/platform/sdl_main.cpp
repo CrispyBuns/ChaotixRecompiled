@@ -33,6 +33,7 @@
 #include "runtime/tile_replace.h"
 #include "renderer/image_io.h"
 #include "renderer/viewport.h"
+#include "runtime/character_mods.h"
 #include "runtime/log.h"
 #include "runtime/patches.h"
 #include "runtime/save.h"
@@ -86,6 +87,9 @@ struct App {
     // machine every frame, like the tiles.
     std::shared_ptr<const SpritePack> sprite_pack;
     std::shared_ptr<SpriteRecorder> sprites;
+    // Character mods' colours (Mods/Characters), null without any. Set on the
+    // machine every frame too.
+    std::shared_ptr<CharacterPalettes> character_palettes;
     SDL_AudioStream* audio = nullptr;
     std::vector<SDL_Gamepad*> pads;
     TouchControls touch;
@@ -767,6 +771,41 @@ void load_tiles(App& app) {
     update_sprite_recorder(app);
 }
 
+// Character mods (docs/CHARACTER_MODS.md): Mods/Characters/<name>.ini, read
+// both for their colours (load_mods) and their stats (apply_rom_patches).
+std::vector<CharacterMod> read_character_mods(App& app) {
+    const std::string dir = mods_root(app) + "Characters";
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
+    const std::string readme = dir + "/README.txt";
+    if (!std::filesystem::exists(std::filesystem::u8path(readme), ec)) {
+        if (FILE* f = std::fopen(readme.c_str(), "w")) {
+            std::fputs("Character mods. One file per character, named mighty.ini, knuckles.ini,\n"
+                       "charmy.ini, vector.ini, bomb.ini, heavy.ini or espio.ini, with any of:\n"
+                       "\n"
+                       "[Palette]      the character's 18 colours, by pixel value (1 to 18):\n"
+                       "1 = #RRGGBB    rounded to the 32X's 32 levels per component, or a 32X\n"
+                       "               colour as stored (0x0000-0x7FFF, blue-green-red, 5 bits each).\n"
+                       "[Cycle]        Espio only: his 16 shimmer sets, five colours each\n"
+                       "0 = #RRGGBB #RRGGBB #RRGGBB #RRGGBB #RRGGBB   (for pixels 2 to 6)\n"
+                       "[Stats]        how the character moves, in the game's own units:\n"
+                       "acceleration = 0x0C   speed_cap, deceleration, gravity, jump, jump_release,\n"
+                       "               roll_friction, spin_dash_min/max/step, glide_speed, glide_fall_speed,\n"
+                       "               air_dash_speed, ... (see docs/CHARACTER_MODS.md)\n"
+                       "\n"
+                       "Colours change only the picture. Stats change how the game plays and take\n"
+                       "effect the next time the game is started. Lines starting with ; are comments.\n"
+                       "New looks for the sprites themselves go in Mods/Textures.\n",
+                       f);
+            std::fclose(f);
+        }
+    }
+    std::vector<std::string> messages;
+    std::vector<CharacterMod> mods = load_character_mods(dir, &messages);
+    for (const auto& msg : messages) LOGW("characters", "%s", msg.c_str());
+    return mods;
+}
+
 // Music and touch images from the Mods folder; again when that folder has
 // changed (Android: shared storage access granted while the app was away).
 void load_mods(App& app) {
@@ -785,6 +824,11 @@ void load_mods(App& app) {
     app.music.attach(*app.m);
     load_touch_skin(app, mods + "Touch");
     load_tiles(app);
+    // The characters' colours, from the ROM as it runs (patched or not).
+    auto palettes = std::make_shared<CharacterPalettes>(app.m->rom, read_character_mods(app));
+    app.character_palettes = palettes->empty() ? nullptr : palettes;
+    app.m->characters = app.character_palettes;
+    if (app.character_palettes) LOGI("characters", "character colours from %sCharacters", mods.c_str());
     LOGI("app", "mods folder: %s", mods.c_str());
 }
 
@@ -814,14 +858,22 @@ void apply_rom_patches(App& app) {
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) { return char(std::tolower(ch)); });
         if (e.is_regular_file(ec) && (ext == ".ips" || ext == ".bps")) files.push_back(e.path().u8string());
     }
-    if (files.empty()) return;
-    std::sort(files.begin(), files.end());
+    if (!files.empty()) {
+        std::sort(files.begin(), files.end());
+        std::vector<std::string> messages;
+        const int applied = app.m->rom.apply_patches(files, &messages);
+        for (const auto& msg : messages) LOGI("patch", "%s", msg.c_str());
+        if (applied)
+            LOGI("patch", "%d patch(es) applied: %zu changed range(s), patched ROM sha1 %s", applied,
+                 app.m->rom.patched.size(), app.m->rom.patched_sha1.c_str());
+    }
+    // Character mods' stats are a data patch too, over the patch files' result,
+    // and like them only read here, before the game starts.
     std::vector<std::string> messages;
-    const int applied = app.m->rom.apply_patches(files, &messages);
-    for (const auto& msg : messages) LOGI("patch", "%s", msg.c_str());
-    if (applied)
-        LOGI("patch", "%d patch(es) applied: %zu changed range(s), patched ROM sha1 %s", applied,
-             app.m->rom.patched.size(), app.m->rom.patched_sha1.c_str());
+    const std::vector<CharacterMod> mods = read_character_mods(app);
+    const int changed = app.m->rom.apply_edits(stat_edits(app.m->rom, mods, &messages), &messages);
+    for (const auto& msg : messages) LOGI("characters", "%s", msg.c_str());
+    if (changed) LOGI("characters", "character stats: %d byte(s) of the movement table changed", changed);
 }
 
 // The image for a button, if the skin has one.
@@ -1213,6 +1265,8 @@ int main(int argc, char** argv) {
     app.m->input.six_button[1] = app.cfg.six_button;
     warn_about_dead_bindings(app);
     if (!app.autotest_frames || !app.mods_dir.empty()) apply_rom_patches(app);  // autotests are hermetic unless asked
+    // TIME ATTACK offers the characters by the names the ROM gives them.
+    app.menu.set_character_names(stage_select::character_names(app.m->rom));
     app.m->reset();
     if (!app.autotest_frames) app.store.load_sram(*app.m);  // autotests are hermetic
     RecompStatus rs = install_recompiled_code(*app.m, app.cfg.use_recompiled && !force_interp);
@@ -1443,6 +1497,7 @@ int main(int argc, char** argv) {
         }
         if (app.fast_forward) accumulator = 0;
         if (app.m->vdp.tiles != app.tiles) app.m->vdp.tiles = app.tiles;
+        if (app.m->characters != app.character_palettes) app.m->characters = app.character_palettes;
         if (TileReplacer* t = app.tiles.get()) {
             t->dumping = app.cfg.dump_graphics;
             if (const int n = write_tile_dumps(*t, app.tiles_dir + "/Dump")) LOGI("tiles", "%d tile(s) dumped", n);

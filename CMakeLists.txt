@@ -44,6 +44,7 @@ add_library(chaotix_runtime STATIC
     src/runtime/tile_replace.cpp
     src/runtime/sprite_record.cpp
     src/runtime/sprite_replace.cpp
+    src/runtime/character_mods.cpp
     src/renderer/compositor.cpp
     src/runtime/save.cpp
     src/audio/ym2612.cpp
