@@ -2,14 +2,16 @@
 """Whole-bank sprite sheets with the real ROM.
 
 Exports the sheets of the characters' banks straight from the ROM (no frame
-played), then loads them, unchanged, as a pack: every frame of every
-character is replaced by its own cell, so in a level with two characters and
-in the lobby every picture must be exactly the original one, and the
-recompiled machine must stay bit-identical to the interpreter with the pack
-on both. Widescreen on and off.
+played), then loads them, unchanged, as a pack: no cell was edited, so
+nothing is replaced. With the cells' hashes taken out of the descriptions,
+every frame of every character is replaced by its own cell instead. Either
+way, in a level with two characters and in the lobby every picture must be
+exactly the original one, and the recompiled machine must stay bit-identical
+to the interpreter with the pack on both. Widescreen on and off.
 
-Then Knuckles' body sheet (bank 02) is recoloured: a level with Knuckles
-changes, still in lockstep, and a level without him does not.
+Then Knuckles' body sheet (bank 02) is recoloured: its 113 cells load, a
+level with Knuckles changes, still in lockstep, and a level without him does
+not.
 
 usage: test_sprite_sheets.py HEADLESS ROM
 """
@@ -113,22 +115,46 @@ class SpriteSheets(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(self.sheets, n[:-4] + ".txt")), n)
         self.assertIn("32x_02.png: 113 frames, 113 graphics", self.export_log)
 
-    def check_unchanged(self, scene, wide):
+    def unhashed(self):
+        """The sheets with descriptions that carry no hashes: every cell loads."""
+        d = os.path.join(self.dir, "unhashed")
+        if not os.path.isdir(d):
+            os.makedirs(d)
+            for f in glob.glob(os.path.join(self.sheets, "32x_*")):
+                if f.endswith(".png"):
+                    shutil.copy(f, d)
+                    continue
+                with open(f, encoding="utf-8") as src:
+                    lines = [line.split() for line in src if not line.startswith("#")]
+                with open(os.path.join(d, os.path.basename(f)), "w", encoding="utf-8") as dst:
+                    for w in lines:
+                        if w and w[0] == "frame" and len(w) == 11:
+                            w = w[:10]
+                        dst.write(" ".join(w) + "\n")
+        return d
+
+    def check_unchanged(self, scene, wide, pack, loaded):
         plain = self.plain_hashes(scene, wide)
-        out, packed = run(*SCENES[scene], "--wide", str(wide), "--tiles", self.sheets, "--lockstep")
-        self.assertIn("sprites: 969 replacement(s) loaded", out, out[-2000:])
+        out, packed = run(*SCENES[scene], "--wide", str(wide), "--tiles", pack, "--lockstep")
+        self.assertIn("sprites: %d replacement(s) loaded" % loaded, out, out[-2000:])
         self.assertIn("lockstep: %d frames bit-identical" % FRAMES, out, out[-2000:])
-        composed = int(re.search(r"sprites: (\d+) pictures composed", out).group(1))
-        self.assertGreater(composed, 100, out[-2000:])
+        if loaded:
+            composed = int(re.search(r"sprites: (\d+) pictures composed", out).group(1))
+            self.assertGreater(composed, 100, out[-2000:])
         differ = [f for f in sorted(plain, key=int) if packed.get(f) != plain[f]]
         self.assertEqual(differ[:5], [], "%s, wide %d: %d of %d pictures differ" % (scene, wide, len(differ), len(plain)))
 
     def test_b_level_unchanged(self):
+        # As exported: no cell edited, so nothing is replaced at all.
         for wide in (53, 0):
-            self.check_unchanged("knuckles_espio", wide)
+            self.check_unchanged("knuckles_espio", wide, self.sheets, 0)
+        # Without the hashes every cell is a replacement, and each must
+        # draw exactly its original.
+        self.check_unchanged("knuckles_espio", 53, self.unhashed(), 969)
 
     def test_c_lobby_unchanged(self):
-        self.check_unchanged("lobby", 53)
+        self.check_unchanged("lobby", 53, self.sheets, 0)
+        self.check_unchanged("lobby", 53, self.unhashed(), 969)
 
     def test_d_a_recoloured_sheet_changes_that_character_only(self):
         mod = os.path.join(self.dir, "knuckles_recoloured")
@@ -138,6 +164,7 @@ class SpriteSheets(unittest.TestCase):
         self.assertGreater(recolour(os.path.join(self.sheets, "32x_02.png"), os.path.join(mod, "32x_02.png"), 7), 10000)
         plain = self.plain_hashes("knuckles_espio", 53)
         out, changed = run(*SCENES["knuckles_espio"], "--wide", "53", "--tiles", mod, "--lockstep")
+        self.assertIn("sprites: 113 replacement(s) loaded", out, out[-2000:])  # bank 02's cells only
         self.assertIn("lockstep: %d frames bit-identical" % FRAMES, out, out[-2000:])
         differ = sum(1 for f in plain if changed.get(f) != plain[f])
         self.assertGreater(differ, len(plain) // 2, "Knuckles did not change")

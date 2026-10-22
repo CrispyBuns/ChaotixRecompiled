@@ -61,6 +61,11 @@ struct SheetCell {
     int same = -1;
     int x = 0, y = 0, w = 0, h = 0;          // the cell in the sheet
     int x0 = 0, x1 = 0, y0 = 0, y1 = 0;      // the box around the hotspot
+    // A graphic's cell as exported (sheet_hash_cells): the FNV-1a hash of
+    // the cell's pixels, row by row. A cell that still hashes to it was not
+    // edited and is not loaded. Descriptions without hashes load every cell.
+    bool hashed = false;
+    uint64_t hash = 0;
 };
 struct SheetLayout {
     int bank = -1;
@@ -86,14 +91,19 @@ std::vector<SpriteBank> read_loaded_banks(const Machine& m);
 SheetLayout sheet_layout(const SpriteBank& bank);
 // The sheet's pixels (palette indices, row-major, layout.width x height).
 std::vector<uint8_t> sheet_pixels(const SpriteBank& bank, const SheetLayout& layout);
+// Notes each graphic cell's hash in `px` (layout.width x height), for the
+// description to carry.
+void sheet_hash_cells(SheetLayout& layout, const uint8_t* px);
 std::string sheet_sidecar(const SheetLayout& layout);
 // False (and `why`, with the line) for a sidecar that is not one, or whose
 // cells do not fit together.
 bool parse_sheet_sidecar(const std::string& text, SheetLayout& out, std::string* why);
 
-// The replacements a sheet holds: one per cell of a graphic (not the empty
-// slots, nor the frames that repeat an earlier one), as 32x_<BB>_<FF>.png
-// would hold it. A cell's replacement is its box; pixels painted to the right
+// The replacements a sheet holds: one per edited cell of a graphic (not the
+// empty slots, nor the frames that repeat an earlier one, nor a cell whose
+// pixels still have the hash it was exported with), as 32x_<BB>_<FF>.png
+// would hold it. An unedited cell is left to the game's own graphic, which
+// costs nothing and follows a graphic the game rewrites as it runs. A cell's replacement is its box; pixels painted to the right
 // of the box or below it, within the cell, make it larger, the way a larger
 // single file grows from the same top-left corner. Pixels left of or above
 // the box cannot be drawn there and are left out (`warnings` says so).

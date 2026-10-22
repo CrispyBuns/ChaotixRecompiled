@@ -138,10 +138,12 @@ sheet is every frame of a bank in one image, side by side.
      with no colour offset.
 2. **Edit.** Copy a sheet and its `.txt` into `Mods/Textures` and edit the
    PNG in an editor that keeps it palette-indexed, as with single files.
-3. **Load.** Each cell of a graphic replaces that frame, exactly as a
-   `32x_<bank>_<frame>.png` of the cell would. A cell left as exported draws
-   exactly the original. A frame's own file in `Mods/Textures` overrides its
-   cell, so a sheet and a few single files can be mixed.
+3. **Load.** Each edited cell of a graphic replaces that frame, exactly as a
+   `32x_<bank>_<frame>.png` of the cell would. A cell left as exported is not
+   loaded at all (the description holds a hash of each cell as exported), so
+   the game draws its own graphic there: a sheet loaded unchanged replaces
+   nothing and costs nothing. A frame's own file in `Mods/Textures`
+   overrides its cell, so a sheet and a few single files can be mixed.
 
 **The layout.** Cells sit sixteen to a row, so frame `0xRC` is in row R,
 column C (frame 0x51 is the second cell of the sixth row). All cells of a
@@ -165,7 +167,8 @@ longer line up, and a modder would have to work out each frame's offset.
 and both read as transparent when a sheet is loaded, so they cannot be used
 as pixel values in a sheet (a single file can).
 
-**How a cell becomes a replacement.** The graphic's box (where the original
+**How a cell becomes a replacement.** A cell is edited when any of its
+pixels differs from the export, inside its box or not. The graphic's box (where the original
 is drawn in the cell) is the replacement, the same size as the original.
 Pixels painted to the right of the box or below it, inside the cell, make the
 replacement larger from the same top-left corner, the way a larger single
@@ -183,18 +186,21 @@ bank 00
 size 817 391
 cell 50 64
 hotspot 24 40
-frame 00 1 1 50 64 -12 14 -18 19
+frame 00 1 1 50 64 -12 14 -18 19 5fd2fcb49b54da67
 frame 08 409 1 50 64 empty
 frame 22 95 89 46 43 same 14
 ```
 
 - `size W H`: the sheet in pixels; `cell W H`: one cell; `hotspot X Y`: the
   hotspot's place in every cell, from its top-left pixel.
-- `frame FF X Y W H x0 x1 y0 y1`: frame FF's cell (its top-left pixel X, Y in
-  the sheet and its size), and the graphic's box around the hotspot: columns
-  x0 to x1 - 1 and lines y0 to y1, as the graphic's header has them (lines
-  divided by 256). The box therefore starts at (X + hotspot X + x0,
-  Y + hotspot Y + y0) and is `x1 - x0` by `y1 - y0 + 1` pixels.
+- `frame FF X Y W H x0 x1 y0 y1 HASH`: frame FF's cell (its top-left pixel
+  X, Y in the sheet and its size), and the graphic's box around the hotspot:
+  columns x0 to x1 - 1 and lines y0 to y1, as the graphic's header has them
+  (lines divided by 256). The box therefore starts at (X + hotspot X + x0,
+  Y + hotspot Y + y0) and is `x1 - x0` by `y1 - y0 + 1` pixels. HASH, 16
+  hex digits, is the FNV-1a hash of the cell's W x H pixel indices, row by
+  row, as exported. It may be left out (descriptions written before it
+  existed have none): every cell of that frame is then loaded, edited or not.
 - `frame FF X Y W H empty`: an empty slot.
 - `frame FF X Y W H same GG`: the slot holds the same graphic as frame GG
   (Knuckles' bank 0a frames 22 and 23 repeat 14 and 15). The game's graphic
@@ -208,14 +214,13 @@ palette-indexed is not loaded, with a line in the log saying why.
 
 Known limits:
 
-- A sheet is read whole: every cell of a graphic is loaded as a replacement,
-  so a scene with a character from a sheet is composed again every picture,
-  at the cost of replacing the scene's sprites (below), even where no cell
-  was changed.
 - A few graphics in SDRAM are rewritten by the game while the scene runs (in
   Botanic Base, the background picture of bank 51 changes its pixel values),
-  so a sheet exported at one moment shows them as they were then, and
-  loading it freezes them; single files have the same limit.
+  so a sheet exported at one moment shows them as they were then. Left
+  unedited they are not loaded and stay the game's; an edited cell of one
+  freezes it, as a single file does.
+- An edit that puts a cell back exactly as exported is no edit: the cell is
+  not loaded.
 - The editor must keep the sheet's indices: one that re-orders or merges the
   palette when saving changes the pixel values.
 
@@ -249,20 +254,26 @@ Known limits:
   empty and repeated slots and its colours; the layout, its description and
   back; every cell as exported giving back the original graphic (and, as a
   replacement, exactly the original bytes); cells growing right and down and
-  not left or up; malformed descriptions, a missing description, another
-  bank's, a full-colour or wrongly sized sheet refused; single files
-  overriding cells.
+  not left or up; an unchanged sheet giving no replacement, one edited pixel
+  exactly one, a description without hashes every cell; malformed
+  descriptions and hashes, a missing description, another bank's, a
+  full-colour or wrongly sized sheet refused; single files overriding cells.
 - `sprite_sheets` (with the ROM): the fourteen character sheets exported
-  from the ROM without playing, loaded unchanged, give exactly the original
-  pictures in Botanic Base 1 (Knuckles and Espio, widescreen and 4:3) and the
-  lobby, with lockstep holding; Knuckles' sheet recoloured changes the level
-  with him in most pictures, in lockstep, and a level with Mighty and Espio
-  not at all.
+  from the ROM without playing, loaded unchanged, load no replacement and
+  give exactly the original pictures in Botanic Base 1 (Knuckles and Espio,
+  widescreen and 4:3) and the lobby, with lockstep holding; with the hashes
+  taken out, all 969 cells load and the pictures are still exactly the
+  original ones. Knuckles' sheet recoloured loads its 113 cells and changes
+  the level with him in most pictures, in lockstep, and a level with Mighty
+  and Espio not at all.
 - By hand: the sheets exported at frame 900 of Botanic Base 1 (the 14
-  character sheets and 27 of the level's SDRAM banks, 1439 replacements),
-  loaded, 3000 frames with random input in the level and the lobby, in
-  widescreen and 4:3: lockstep bit-identical, `--sprites-check` 0 mismatches,
-  no byte of polygons and fills changed.
+  character sheets and 27 of the level's SDRAM banks), loaded unchanged:
+  0 replacements and the 1500 pictures of the level identical, in lockstep
+  (before the hashes, bank 51's frozen cell changed 344 of them). With
+  Knuckles' body and the HUD font (bank 13, from SDRAM) recoloured, 3000
+  frames with random input in the level and the lobby, in widescreen and
+  4:3: lockstep bit-identical, `--sprites-check` 0 mismatches, no byte of
+  polygons and fills changed.
 - The cost, Botanic Base 1 in widescreen with random input (about 1.45 ms a
   frame without mods): a sprite pack loaded but none of its graphics in the
   scene, about 0.08 ms a frame (recording the draws and following the frame

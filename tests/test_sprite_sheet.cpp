@@ -179,6 +179,43 @@ TEST(sprite_sheet, a_sheet_gives_back_every_graphic_it_was_made_from) {
     CHECK(!sheet_replacements(back, px.data(), l.width - 1, l.height, reps, &warnings, &why));
 }
 
+TEST(sprite_sheet, only_edited_cells_become_replacements) {
+    const std::vector<uint8_t> rom = test_rom();
+    SpriteBank b;
+    CHECK(read_rom_bank(rom, 2, b, nullptr));
+    SheetLayout l = sheet_layout(b);
+    std::vector<uint8_t> px = sheet_pixels(b, l);
+    sheet_hash_cells(l, px.data());
+    SheetLayout hashed, plain;
+    std::string why;
+    CHECK(parse_sheet_sidecar(sheet_sidecar(l), hashed, &why));
+    CHECK(hashed.cells.size() == 4 && hashed.cells[0].hashed && hashed.cells[0].hash == l.cells[0].hash);
+    CHECK(!hashed.cells[1].hashed);  // an empty slot has none
+    std::vector<SheetReplacement> reps;
+    std::vector<std::string> warnings;
+    // As exported: nothing.
+    CHECK(sheet_replacements(hashed, px.data(), l.width, l.height, reps, &warnings, &why));
+    CHECK_EQ(reps.size(), size_t(0));
+    // One pixel of frame 2's cell edited: exactly that frame.
+    px[size_t(2 * l.width + 28)] = 5;
+    CHECK(sheet_replacements(hashed, px.data(), l.width, l.height, reps, &warnings, &why));
+    CHECK(reps.size() == 1 && reps[0].frame == 2 && reps[0].image.px[1 * 6 + 1] == 5);
+    // Painting in the room outside the box counts as an edit too.
+    px = sheet_pixels(b, l);
+    px[size_t(9 * l.width + 10)] = 9;
+    CHECK(sheet_replacements(hashed, px.data(), l.width, l.height, reps, &warnings, &why));
+    CHECK(reps.size() == 1 && reps[0].frame == 0 && reps[0].image.width == 10);
+    // A description without hashes (as first written) loads every cell.
+    px = sheet_pixels(b, l);
+    CHECK(parse_sheet_sidecar(sheet_sidecar(sheet_layout(b)), plain, &why));
+    CHECK(!plain.cells[0].hashed);
+    CHECK(sheet_replacements(plain, px.data(), l.width, l.height, reps, &warnings, &why));
+    CHECK_EQ(reps.size(), size_t(2));
+    // A hash that is not 16 hex digits is refused.
+    CHECK(!error_of(std::string(kGood) + "frame 02 12 1 10 10 -4 4 -3 0 12345\n").empty());
+    CHECK(error_of(std::string(kGood) + "frame 02 12 1 10 10 -4 4 -3 0 0123456789ABCDEF\n").empty());
+}
+
 TEST(sprite_sheet, a_cell_grows_right_and_down_and_not_left_or_up) {
     const std::vector<uint8_t> rom = test_rom();
     SpriteBank b;
@@ -247,8 +284,11 @@ TEST(sprite_sheet, sheets_load_as_a_pack_and_single_files_override_their_cells) 
     const std::vector<uint8_t> rom = test_rom();
     SpriteBank b;
     CHECK(read_rom_bank(rom, 2, b, nullptr));
-    const SheetLayout l = sheet_layout(b);
-    const std::vector<uint8_t> px = sheet_pixels(b, l);
+    SheetLayout l = sheet_layout(b);
+    std::vector<uint8_t> px = sheet_pixels(b, l);
+    sheet_hash_cells(l, px.data());
+    px[size_t(9 * l.width + 1)] = 4;   // frames 0 and 2 edited
+    px[size_t(2 * l.width + 28)] = 5;
     auto write_text = [&d](const std::string& name, const std::string& text) {
         if (FILE* f = std::fopen((d + "/" + name).c_str(), "wb")) {
             std::fputs(text.c_str(), f);
@@ -293,7 +333,7 @@ TEST(sprite_sheet, sheets_load_as_a_pack_and_single_files_override_their_cells) 
     SpriteDraw draw;
     draw.bank = 2;
     draw.frame = 0;
-    CHECK(pack.find(draw) && same_image(*pack.find(draw), image_of(g0)));
+    CHECK(pack.find(draw) && pack.find(draw)->width == 8 && pack.find(draw)->px[8] == 4);
     draw.frame = 2;
     CHECK(pack.find(draw) && pack.find(draw)->width == 2);
     draw.frame = 1;

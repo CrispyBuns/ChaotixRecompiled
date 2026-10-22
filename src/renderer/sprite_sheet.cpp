@@ -157,6 +157,36 @@ std::string hex2(int v) {
     return b;
 }
 
+std::string hex16(uint64_t v) {
+    char b[20];
+    std::snprintf(b, sizeof b, "%016llx", static_cast<unsigned long long>(v));
+    return b;
+}
+
+bool parse_hex16(const std::string& s, uint64_t* v) {
+    if (s.size() != 16) return false;
+    uint64_t n = 0;
+    for (const char ch : s) {
+        const int c = std::tolower(static_cast<unsigned char>(ch));
+        if (c >= '0' && c <= '9') n = n << 4 | unsigned(c - '0');
+        else if (c >= 'a' && c <= 'f') n = n << 4 | unsigned(c - 'a' + 10);
+        else return false;
+    }
+    *v = n;
+    return true;
+}
+
+// FNV-1a of a cell's pixels, row by row, as SpriteRecorder::hash.
+uint64_t cell_hash(const SheetCell& c, const uint8_t* px, int width) {
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (int y = c.y; y < c.y + c.h; ++y)
+        for (int x = c.x; x < c.x + c.w; ++x) {
+            h ^= px[size_t(y) * size_t(width) + size_t(x)];
+            h *= 0x100000001b3ull;
+        }
+    return h;
+}
+
 std::string sheet_name(int bank, const char* ext) { return "32x_" + hex2(bank) + ext; }
 
 bool read_file(const std::filesystem::path& p, std::string& out) {
@@ -266,6 +296,13 @@ std::vector<uint8_t> sheet_pixels(const SpriteBank& bank, const SheetLayout& l) 
     return px;
 }
 
+void sheet_hash_cells(SheetLayout& l, const uint8_t* px) {
+    for (SheetCell& c : l.cells) {
+        c.hashed = c.kind == BankFrame::Graphic;
+        if (c.hashed) c.hash = cell_hash(c, px, l.width);
+    }
+}
+
 std::string sheet_sidecar(const SheetLayout& l) {
     std::ostringstream s;
     s << "# Knuckles' Chaotix Recompiled: every frame of bank " << hex2(l.bank) << " in " << sheet_name(l.bank, ".png")
@@ -274,6 +311,8 @@ std::string sheet_sidecar(const SheetLayout& l) {
          "# pixel), and the graphic's box around the hotspot: columns x0 to x1 - 1, lines\n"
          "# y0 to y1. The hotspot is at (X, Y) + hotspot in every cell. \"empty\" is an\n"
          "# empty slot; \"same GG\" repeats frame GG's graphic and is replaced through it.\n"
+         "# The last word of a graphic's line is a hash of its cell as exported: a cell\n"
+         "# left as it was is not loaded, so the game draws its own graphic there.\n"
          "# Index 0 is transparent; 0xFE (outside the box) and 0xFF (the grid) are too.\n"
       << "chaotix-sprite-sheet 1\n"
       << "bank " << hex2(l.bank) << "\n"
@@ -285,6 +324,7 @@ std::string sheet_sidecar(const SheetLayout& l) {
         if (c.kind == BankFrame::Empty) s << " empty";
         else if (c.kind == BankFrame::Same) s << " same " << hex2(c.same);
         else s << " " << c.x0 << " " << c.x1 << " " << c.y0 << " " << c.y1;
+        if (c.kind == BankFrame::Graphic && c.hashed) s << " " << hex16(c.hash);
         s << "\n";
     }
     return s.str();
@@ -357,7 +397,11 @@ bool parse_sheet_sidecar(const std::string& text, SheetLayout& out, std::string*
                 c.kind = BankFrame::Same;
             } else {
                 int b[4];
-                if (w.size() != 10 || !ints(6, 4, b)) return fail("frame " + w[1] + ": the box is x0 x1 y0 y1");
+                if ((w.size() != 10 && w.size() != 11) || !ints(6, 4, b))
+                    return fail("frame " + w[1] + ": the box is x0 x1 y0 y1, then optionally the cell's hash");
+                if (w.size() == 11 && !parse_hex16(w[10], &c.hash))
+                    return fail("frame " + w[1] + ": the cell's hash is 16 hex digits");
+                c.hashed = w.size() == 11;
                 c.kind = BankFrame::Graphic;
                 c.x0 = b[0]; c.x1 = b[1]; c.y0 = b[2]; c.y1 = b[3];
                 if (c.x1 <= c.x0 || c.y1 < c.y0) return fail("frame " + w[1] + ": an empty box");
@@ -402,6 +446,9 @@ bool sheet_replacements(const SheetLayout& l, const uint8_t* px, int width, int 
     };
     for (const SheetCell& c : l.cells) {
         if (c.kind != BankFrame::Graphic) continue;
+        // Unedited: the game's own graphic is drawn, at no cost, even where
+        // the game rewrites it while the scene runs.
+        if (c.hashed && cell_hash(c, px, width) == c.hash) continue;
         const int bx = c.x + l.hot_x + c.x0, by = c.y + l.hot_y + c.y0;
         int w = c.x1 - c.x0, h = c.y1 - c.y0 + 1;
         // Pixels painted right of or below the box, within the cell, make
@@ -441,8 +488,9 @@ int export_sprite_sheets(const Machine& m, const std::string& dir, std::vector<s
     std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
     int written = 0;
     for (const SpriteBank& bank : banks) {
-        const SheetLayout l = sheet_layout(bank);
+        SheetLayout l = sheet_layout(bank);
         const std::vector<uint8_t> px = sheet_pixels(bank, l);
+        sheet_hash_cells(l, px.data());
         const std::string png = dir + "/" + sheet_name(bank.bank, ".png");
         const std::string txt = dir + "/" + sheet_name(bank.bank, ".txt");
         std::ofstream f(std::filesystem::u8path(txt), std::ios::binary);
