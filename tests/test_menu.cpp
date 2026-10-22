@@ -337,6 +337,23 @@ TEST(menu, dump_graphics_dumps_both_kinds_and_reads_its_older_name) {
     std::remove(path.c_str());
 }
 
+TEST(menu, export_sprites_writes_the_sheets_when_pressed) {
+    Config cfg;
+    cfg.set_defaults();
+    int exports = 0;
+    Menu m;
+    m.bind(cfg);
+    Menu::Hooks h;
+    h.export_sprites = [&exports] { ++exports; };
+    m.set_hooks(h);
+    open_category(m, "EXTRAS");
+    CHECK(select_row(m, "EXPORT SPRITES"));
+    CHECK(m.on_key(SDLK_RIGHT));  // not a value: stepping does nothing
+    CHECK_EQ(exports, 0);
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK_EQ(exports, 1);
+}
+
 TEST(menu, resetting_awards_asks_twice) {
     Config cfg;
     cfg.set_defaults();

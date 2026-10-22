@@ -40,6 +40,9 @@ public:
         std::function<std::string(int index)> pad_name;
         // Locks every achievement again and forgets the saved progress.
         std::function<void()> reset_awards;
+        // Writes every frame of the characters' sprite banks as sheets to
+        // Mods/Textures/Sheets.
+        std::function<void()> export_sprites;
         // Starts a level straight away, the way the game's own stage select
         // would: TIME ATTACK.
         std::function<void(const stage_select::Request&)> start_stage;

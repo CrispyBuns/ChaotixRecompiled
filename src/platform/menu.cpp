@@ -488,6 +488,9 @@ void Menu::build_extras() {
                       [c] { return on_off(c->dump_graphics); },
                       [c](int s) { if (s) c->dump_graphics = !c->dump_graphics; },
                       "save the graphics drawn to Mods/Textures/Dump"});
+    if (hooks_.export_sprites)
+        items_.push_back({"EXPORT SPRITES", {}, [this](int step) { if (step == 0) hooks_.export_sprites(); },
+                          "every frame of the characters, to Mods/Textures/Sheets"});
     items_.push_back({"AWARDS",
                       [c] { return on_off(c->achievements); },
                       [c](int s) { if (s) c->achievements = !c->achievements; }});

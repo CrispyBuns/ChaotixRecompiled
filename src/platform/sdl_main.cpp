@@ -26,6 +26,7 @@
 #include "input/input.h"
 #include "input/touch_controls.h"
 #include "renderer/sprite_pack.h"
+#include "renderer/sprite_sheet.h"
 #include "renderer/tile_pack.h"
 #include "runtime/sprite_record.h"
 #include "runtime/sprite_replace.h"
@@ -738,7 +739,11 @@ void load_tiles(App& app) {
                        "32x_<bank>_<frame>.png, 32x_<hash>.png: 32X sprites (characters, the HUD,\n"
                        "objects, the title). The image's top-left corner stays where the original's\n"
                        "was; another size is drawn at its own size from there. The colour offsets the\n"
-                       "game gives the characters still apply, so keep to the indices the dump uses.\n",
+                       "game gives the characters still apply, so keep to the indices the dump uses.\n"
+                       "\n"
+                       "32x_<bank>.png with 32x_<bank>.txt: every frame of a bank in one sheet.\n"
+                       "OPTIONS > EXTRAS > EXPORT SPRITES writes the characters' sheets to the Sheets\n"
+                       "folder; copy a sheet and its .txt here to use it. A frame's own file wins.\n",
                        f);
             std::fclose(f);
         }
@@ -1145,6 +1150,17 @@ int main(int argc, char** argv) {
             app.achievements.reset_progress();
             std::error_code ec;
             std::filesystem::remove(achievements_progress_path(app), ec);
+        };
+        hooks.export_sprites = [&app] {
+            // The characters' banks come from the ROM, so this works from the
+            // front end without playing; the banks the scene behind has
+            // loaded come along too.
+            if (!app.m) return;
+            const std::string dir = mods_root(app) + "Textures/Sheets";
+            std::vector<std::string> messages;
+            const int n = export_sprite_sheets(*app.m, dir, &messages);
+            for (const auto& msg : messages) LOGI("sprites", "%s", msg.c_str());
+            LOGI("sprites", "%d sprite sheet(s) exported to %s", n, dir.c_str());
         };
         app.start_stage = hooks.start_stage;
         app.menu.set_hooks(std::move(hooks));
