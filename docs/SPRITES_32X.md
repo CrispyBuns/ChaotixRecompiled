@@ -9,11 +9,12 @@ Slider 1, the hub, the bonus stage, the special stage, the SEGA logo, the
 title intro and the title screen. Addresses are SH-2 addresses; the SH-2 code
 runs in SDRAM, copied from ROM 0x77800.
 
-Steps 1 and 2 of the plan below are done (`runtime/sprite_record.*`): the
-draws are recorded, and the layer's sprites can be rebuilt host-side exactly.
-Everything marked *verified* was checked by that rebuild against the
-emulated frame buffer, and against the game's own blitter code run on random
-calls.
+The plan below is done: the draws are recorded, the layer's sprites can be
+rebuilt host-side exactly (`runtime/sprite_record.*`), and replaced by PNG
+files (`runtime/sprite_replace.*`, `renderer/sprite_pack.*`; how to use it is
+in [TEXTURE_MODS.md](TEXTURE_MODS.md)). Everything marked *verified* was
+checked by that rebuild against the emulated frame buffer, and against the
+game's own blitter code run on random calls.
 
 ## Who draws
 
@@ -111,6 +112,11 @@ Graphics are 8 bpp palette indices, the same format in ROM and in SDRAM:
    pixel bytes, where 0 is transparent. The count is even: the blitters copy
    words.
 3. A span with `xs == xe` ends the graphic.
+
+In every graphic of the scenes below the spans lie within the box, columns
+`x0 ≤ xs`, `xe ≤ x1` and lines `y0 ≤ y ≤ y1`: the box's bottom line is
+inclusive, so a graphic is `x1 − x0` by `(y1 − y0) / 256 + 1` pixels (every
+graphic has spans on its line `y1`). Every span starts at an even column.
 
 Each scene copies the bank table (128 entries, from ROM 0x020A0000) to
 0x06003614, then decompresses chosen banks into SDRAM (0x06000464, with the
@@ -264,15 +270,83 @@ line's first column also clears that line's margins in the shadow
 Madness a fill from column 0 so erases sprite pixels already drawn in the
 margins. The self-test counts those bytes as drawn over.
 
-## Plan
+## Replacing (step 3)
 
-1. **Record draws.** Done (above).
-2. **Self-test.** Done (above).
-3. **Replace.** Draw a PNG in place of a graphic at its hotspot, flipped and
-   scaled as the original, with the original's priorities, as part of the
-   rebuild; bytes the list does not explain (polygons, fills) come from the
-   emulated frame buffer. High-resolution PNGs need the compositor to output
-   more than 320 pixels, which is a separate step.
+A replacement is a palette-indexed PNG of the graphic's box holding its own
+pixel values, before the colour offset and flag bit 2 (TEXTURE_MODS.md has
+the names and rules). Nothing of it reaches the machine: the frame buffers,
+the 32X and VDP registers and the timing are the emulated ones, and
+`--lockstep` stays bit-identical with a pack on both machines. What changes
+is the 32X layer the compositor reads (`render_line32x`), for the buffer on
+display.
+
+**The replacement as a graphic.** `replacement_graphic()` turns the image
+into a graphic in the game's own format, and the rebuild's blitters
+(`rasterise_sprite`, which now hands its bytes to a sink) draw it with the
+original call's flags, hotspot, scale, warp, clip rectangle and colour
+offset. So flips, the 16.16 rounding of the scaled blitters, the stipple,
+the clipping (the widened clip rectangle included), the palette half and
+the colour offset are those of the original, by construction. An image of
+the box's size keeps the original's spans in their order, with the image's
+pixels in them, and adds one span a line for the pixels the original's
+spans do not reach, starting at an even column like the game's (the stipple
+draws a span's even pixels); so the dump of a graphic, as a replacement,
+gives back exactly the original's bytes. An image of another size gets a box
+of its own size at the original's top-left corner, one span a line from its
+first to its last pixel; the spans' columns and lines are bytes, so the box
+must stay within −128..127 of the hotspot, or the original is drawn.
+
+**Following the writes.** With a pack set, the recorder keeps a
+`SpriteLayer`: for every byte of the back buffer, in the frame buffer and in
+the widescreen margin shadow (`Machine::fb_margin`, routed as
+`Machine::fb_write` and the auto fill route them), whether a blitter
+(overwrite image) or something else (direct writes, auto fills, the shadow's
+margin clears) wrote it last; for blitter bytes, the value before the first
+blitter write since the last other write; and how many draws the list had at
+the last other write. Each draw also notes its route (frame buffer only, a
+widened level, the widened special stage). All of it is read from the
+machine, before the write, in the hooks the self-test already used.
+
+**Composing.** When a buffer goes on display and its list draws at least one
+replaced graphic (and the buffer was followed since it became the back
+buffer), `SpriteLayer::compose` copies the buffer and its shadow, then
+replays the list in order -- each replaced draw as its replacement, the
+others as they are -- into a canvas, each draw only on bytes where nothing
+but blitters wrote since it began (draw index ≥ the count at the last other
+write). Polygons and fills drawn after a sprite thus stay on top of its
+replacement, and a larger replacement covers polygons drawn before it, as the
+game's order would. Only bytes that a replaced draw writes, as the original
+or as the replacement, are composed again: the replay's byte if it wrote one,
+otherwise what lay under the blitters (or the emulated byte, where something
+else wrote last). Every other byte, and every list without a replacement, is
+the emulated frame buffer's, so a pack that has nothing for the scene costs
+only the recording. The composed buffer and shadow replace the emulated ones
+as the compositor's input, for every line of that picture, until the next
+flip.
+
+With nothing replaced the replay of a list equals the emulated frame buffer
+(the self-test), so a pack of the dumped graphics changes no picture: the
+`sprite_pack` test checks that frame by frame in five scenes, widescreen and
+4:3. `--sprites-check` with a pack also counts the bytes polygons and fills
+wrote last that the composed picture changes; a pack that keeps each
+graphic's footprint must change none.
+
+**The margin clears.** In a widened level, any auto fill word at a line's
+first column clears that line's margins in the shadow
+(`Machine::fb_margin_clear_line`), not only the per-frame clear: the shadow
+cannot tell the clear from a polygon's span from x = 0. In the levels checked
+the only such fills after sprites are the title card's bars as a level starts
+(3 to 100 words, from column 0), and they erase sprite pixels already drawn in
+those lines' margins. The composition follows the shadow exactly (the clears
+are "other" writes), so a replaced picture shows the same as the original
+there; it is left as it is, since telling the bars apart from a clear would
+change the widescreen picture without replacements too.
+
+`chaotix_headless --tiles DIR` loads the sprite pack (`32x_*.png`) along with
+the tiles, and `--dump-graphics DIR` (or `--dump-tiles`) dumps both kinds.
+
+High-resolution replacements need the compositor to output more than 320
+pixels, which is a separate step.
 
 Not determined yet: which 68K routine builds the list, the layouts of the
 other opcodes, and what the routine at 0x06002C0A does to the menu's copies.
