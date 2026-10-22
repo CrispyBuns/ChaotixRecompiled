@@ -32,6 +32,7 @@ screen is what runs when nothing is installed yet.
 
 - Files: `assets/icon/icon.png`, `assets/icon/icon_64.rgba`,
   `platforms/windows/app.ico`, `platforms/android/app/src/main/res/mipmap-*/ic_launcher.png`
+  (the macOS and iOS icons are scaled from `icon.png` when they are packaged)
 - Pixel art of Knuckles by [Abdouxgo](https://github.com/Abdouxgo), contributed
   in [issue #22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22);
   the background was made transparent and the sizes scaled from it. Knuckles
@@ -49,10 +50,13 @@ Fetched or installed separately; nothing from them is committed here.
 |---|---|---|
 | [SDL3](https://github.com/libsdl-org/SDL) ≥ 3.2 | Zlib | window, rendering, input, audio, file dialogs |
 | [SDL_ttf](https://github.com/libsdl-org/SDL_ttf) ≥ 3.2 | Zlib | text rendering for the setup and achievement screens |
-| FreeType, HarfBuzz | FTL / MIT | vendored inside SDL_ttf when it is built from source |
+| FreeType, HarfBuzz, plutosvg, plutovg | FTL / MIT / MIT / MIT | vendored inside SDL_ttf when it is built from source |
 
 On a desktop the two SDL libraries come from a package manager
 (`mingw-w64-x86_64-sdl3`, `mingw-w64-x86_64-sdl3-ttf`, or the equivalent).
-For Android, iOS and CI they are built from a source checkout — see
+For Android, macOS, iOS and CI they are built from a source checkout — see
 `CHAOTIX_SDL3_SOURCE_DIR` and `CHAOTIX_SDL3_TTF_SOURCE_DIR` in the build
-files, and [platforms/android/README.md](platforms/android/README.md).
+files, [platforms/android/README.md](platforms/android/README.md) and
+[docs/BUILDING_APPLE.md](docs/BUILDING_APPLE.md). The macOS and iOS builds
+link all of them into the program; their packages carry the licence texts in
+`licenses/` (`scripts/package_apple.sh` copies them from the source trees).

@@ -111,5 +111,5 @@ camera clamp 改變會影響依 camera 決定的物件啟動時機，因此「�
 
 - `CMakePresets.json`：windows-msvc、windows-mingw、macos-universal、linux、android-arm64、ios。
 - `platforms/android`：SDL3 Android Gradle 專案（`externalNativeBuild` 指向根 CMake）。
-- `platforms/ios`：CMake Xcode 生成 + Info.plist、檔案匯入（Files app 放 ROM）。
+- `platforms/apple`：macOS 與 iOS 的 Info.plist；`scripts/package_apple.sh macos|ios VERSION` 在 Mac 上建出簽好 ad hoc 的 .app（zip）與 .ipa（見 `docs/BUILDING_APPLE.md`）。iOS 用 Files app 把 ROM 放進 App 的 Documents，或用 Browse 開系統的文件選擇器。macOS（M1）全部測試通過；iOS 已在模擬器上執行，尚未在實機上試過。
 - 各平台實機驗證 `--autotest` 截圖與 golden hash。

@@ -28,9 +28,10 @@ unmodified game, which is checked by a test. Scenes outside levels stay 4:3.
 | Platform | State |
 |---|---|
 | Windows | built and played (MSYS2 GCC, and MSVC) |
-| Linux / macOS | build configuration present, not yet run by the author |
+| Linux | build configuration present, not yet run by the author |
+| macOS | [builds and runs](docs/BUILDING_APPLE.md) on Apple Silicon (an M1; every test passes, lockstep bit-identical) |
 | Android | [builds and runs](platforms/android/README.md) (verified on an API 36 emulator) |
-| iOS | build configuration present, not yet built |
+| iOS / iPadOS | [builds and runs in the iOS Simulator](docs/BUILDING_APPLE.md); an `.ipa` for sideloading, not yet tried on a device |
 
 [docs/MILESTONES.md](docs/MILESTONES.md) tracks the detail;
 [ARCHITECTURE.md](ARCHITECTURE.md) explains how it is put together. (Those two documents are written in
@@ -65,7 +66,9 @@ environment variable set.
 
 Cross builds (Android, iOS) do not run the recompiler: build once on a host
 with `CHAOTIX_ROM` so `generated/` exists, then configure the target build,
-which picks it up. See [platforms/android/README.md](platforms/android/README.md).
+which picks it up. See [platforms/android/README.md](platforms/android/README.md),
+and [docs/BUILDING_APPLE.md](docs/BUILDING_APPLE.md) for the macOS app and the
+iOS `.ipa` (`scripts/package_apple.sh macos|ios VERSION` on a Mac).
 
 ## Run
 
@@ -75,7 +78,8 @@ build/ChaotixRecompiled
 
 On the first launch a setup page asks for your ROM. It lists the ROMs it can
 find (Downloads, Documents, an `__ROM__` folder next to the executable, the
-app's own folder on Android); you can also drag a file onto the window, press
+app's own folder on Android, the app's Documents on iOS, where the Files app
+can put it); you can also drag a file onto the window, press
 `O` to browse, or tap the on-screen buttons. The file is verified by SHA-1 and
 copied into the app's own folder, so later launches go straight into the game.
 A verified ROM given on the command line (including dragging it onto the
@@ -92,7 +96,11 @@ opens a menu page at startup (so it can be captured without a keyboard;
 `timeattack` is one of them).
 
 Settings live in the user data directory (`Config/chaotix.ini`), saves in
-`SaveData/`, the installed ROM in `Game/`.
+`SaveData/`, the installed ROM in `Game/`. That directory is
+`%APPDATA%\ChaotixRecompiled\ChaotixRecompiled` on Windows,
+`~/.local/share/ChaotixRecompiled/ChaotixRecompiled` on Linux,
+`~/Library/Application Support/ChaotixRecompiled/ChaotixRecompiled` on macOS
+and the app's Documents on iOS (the Files app's On My iPhone > Chaotix).
 
 | Key | Action |
 |---|---|
@@ -249,7 +257,8 @@ rest and while held, custom images included: 65% and 100% by default.
 The `Mods` folder is in the user data folder. On Android it is
 `ChaotixRecompiled/Mods` in the phone's storage once you allow it (OPTIONS >
 EXTRAS > MODS FOLDER opens Android's "All files access" page), and
-`Android/data/org.chaotixrecompiled/files/Mods` until then.
+`Android/data/org.chaotixrecompiled/files/Mods` until then. On iOS it is
+`Mods` in the app's Documents, which the Files app shows.
 
 In widescreen levels the HUD keeps to the left edge of the picture; OPTIONS >
 VIDEO > WIDE HUD puts it back at its 4:3 place.

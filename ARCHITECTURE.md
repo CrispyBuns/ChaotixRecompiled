@@ -21,7 +21,7 @@
 | SDL3 前端（Windowed/Borderless/Fullscreen、HiDPI、integer/fit/stretch、aspect ratio、鍵盤/手把/觸控、debug overlay） | ✅（Windows 已實測） | `--autotest` 讀回實際輸出畫面 |
 | 音效（Z80 直譯器 + YM2612 FM + SN76489 PSG + PWM 混音 → SDL3 audio stream） | ✅ 第一版（音質未經聽感/逐 sample 驗證） | WAV 輸出 + 頻譜檢查（有音高與節奏結構） |
 | 真正寬螢幕（關卡中最多 448×224 ≈ 1.87:1，涵蓋 16:9 / 16:10；其他場景 4:3 加側邊黑條） | ✅ | `lockstep_widescreen`、`golden_frames_widescreen`、36,000 幀寬螢幕 lockstep；見 §8 |
-| Android / iOS / macOS / Linux 建置 | ⏳ `CMakePresets.json`、Android Gradle 專案、iOS Info.plist 已建立；**尚未在這些平台實際建置** | 見 §9 |
+| Android / iOS / macOS / Linux 建置 | ✅ Android（Gradle）、macOS .app 與 iOS .ipa（`scripts/package_apple.sh`，見 [docs/BUILDING_APPLE.md](docs/BUILDING_APPLE.md)）；macOS（M1）上全部測試通過、lockstep bit-identical；iOS 只在模擬器上跑過 | 見 §9 |
 
 實測數據（Windows x64、MinGW GCC 15、Release）：
 - 重編譯後執行：約 **0.83–0.92 ms / frame**（原機一幀 16.7 ms），SDL 前端鎖定 59.92 Hz。
