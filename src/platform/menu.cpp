@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstdio>
+#include <iterator>
 #include <string>
 
 #include "frontend/config.h"
@@ -306,19 +307,26 @@ void Menu::build_time_attack() {
     items_.push_back({"AT-TIME",
                       [c] { return std::string(kTimes[(c->ta_time >> 1) & 3]); },
                       [c](int s) { if (s) c->ta_time = ((c->ta_time / 2 + s + 4) % 4) * 2; }});
-    // The two character rows skip the gap in the game's table, which loads
-    // broken art.
-    auto step_character = [](int& who, int s) {
+    // The names are the ROM's, so a ROM patch that renames a character shows
+    // here. The two character rows skip the gap in the game's table, which
+    // loads broken art, for as long as it has only the game's placeholder
+    // for a name.
+    std::vector<std::string> names = characters_;
+    if (names.size() != size_t(kCharacterCount)) names.assign(std::begin(kCharacters), std::end(kCharacters));
+    auto name_of = [names](int who) {
+        return who >= 0 && who < kCharacterCount ? names[size_t(who)] : std::string();
+    };
+    auto step_character = [names](int& who, int s) {
         for (int i = 0; i < kCharacterCount; ++i) {
             who = (who + s + kCharacterCount) % kCharacterCount;
-            if (who != kBrokenCharacter) return;
+            if (!is_placeholder_name(names[size_t(who)])) return;
         }
     };
     items_.push_back({"PLAYER",
-                      [c] { return std::string(kCharacters[c->ta_player]); },
+                      [c, name_of] { return name_of(c->ta_player); },
                       [c, step_character](int s) { if (s) step_character(c->ta_player, s); }});
     items_.push_back({"COMBI",
-                      [c] { return std::string(kCharacters[c->ta_combi]); },
+                      [c, name_of] { return name_of(c->ta_combi); },
                       [c, step_character](int s) { if (s) step_character(c->ta_combi, s); }});
     items_.push_back({"PLAYERS",
                       [c] { return std::string(c->ta_two_players ? "2 PLAYERS" : "1 PLAYER"); },

@@ -25,10 +25,12 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace chaotix {
 
 class Machine;
+struct Rom;
 
 namespace stage_select {
 
@@ -59,6 +61,17 @@ inline constexpr const char* kCharacters[] = {
 };
 inline constexpr int kCharacterCount = int(sizeof kCharacters / sizeof kCharacters[0]);
 inline constexpr int kBrokenCharacter = 1;
+
+// The names as the ROM has them, for a front end to offer: $8F7254 (ROM
+// 0x077254) holds one word per character, the offset from that word to its
+// NUL-terminated name, padded with spaces, at $8F74E8. So a ROM patch that
+// renames a character, or gives slot 1 a name, shows up. A name that cannot
+// be read (an offset out of the ROM, no terminator, a character the font
+// does not have) falls back to kCharacters.
+std::vector<std::string> character_names(const Rom& rom);
+// The game's placeholder for a slot without a character: only asterisks
+// (slot 1's "**********"), or nothing at all.
+bool is_placeholder_name(const std::string& name);
 
 // What the game normally starts you with.
 inline constexpr int kKnuckles = 2;

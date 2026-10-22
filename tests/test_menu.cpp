@@ -6,7 +6,9 @@
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
+#include <iterator>
 #include <string>
+#include <vector>
 
 #include "frontend/config.h"
 #include "game/achievements.h"
@@ -451,6 +453,35 @@ TEST(menu, time_attack_page_carries_the_choices_into_the_request) {
     CHECK(got.two_players);
     CHECK(stage_select::valid(got));
     CHECK(!m.open());                 // and it gets out of the way of the game
+}
+
+TEST(menu, time_attack_offers_slot_1_only_once_the_rom_names_it) {
+    // The names come from the ROM (stage_select::character_names); the unused
+    // slot is skipped while it has only the game's placeholder.
+    Config cfg;
+    cfg.set_defaults();
+    Menu m;
+    m.bind(cfg);
+    std::vector<std::string> names(std::begin(stage_select::kCharacters), std::end(stage_select::kCharacters));
+    m.set_character_names(names);
+    m.open_front();
+    CHECK(select_row(m, "TIME ATTACK"));
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK(select_row(m, "PLAYER"));
+    cfg.ta_player = 0;
+    m.on_key(SDLK_RIGHT);
+    CHECK_EQ(cfg.ta_player, 2);         // MIGHTY -> KNUCKLES, past the gap
+    m.on_key(SDLK_LEFT);
+    CHECK_EQ(cfg.ta_player, 0);
+    // A patched ROM that gives slot 1 a name: offered.
+    names[1] = "SONIC";
+    m.set_character_names(names);
+    m.on_key(SDLK_ESCAPE);
+    CHECK(select_row(m, "TIME ATTACK"));
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK(select_row(m, "PLAYER"));
+    m.on_key(SDLK_RIGHT);
+    CHECK_EQ(cfg.ta_player, 1);
 }
 
 TEST(menu, time_attack_level_follows_what_the_place_has) {

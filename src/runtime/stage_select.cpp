@@ -1,5 +1,6 @@
 // See stage_select.h for where each address and table came from.
 #include "runtime/stage_select.h"
+#include "runtime/rom.h"
 #include "runtime/system.h"
 
 #include <cstdio>
@@ -48,6 +49,34 @@ std::string format_time(int frames) {
     char out[32];
     std::snprintf(out, sizeof out, "%d'%02d\"%02d", cs / 6000, (cs / 100) % 60, cs % 100);
     return out;
+}
+
+std::vector<std::string> character_names(const Rom& rom) {
+    constexpr uint32_t kTable = 0x077254;  // $8F7254
+    constexpr size_t kLongest = 30;
+    std::vector<std::string> names;
+    for (int id = 0; id < kCharacterCount; ++id) {
+        std::string name;
+        bool ok = false;
+        const uint32_t at = kTable + 2 * uint32_t(id);
+        if (at + 2 <= rom.file_size) {
+            // The offset is signed and counted from the word itself.
+            const uint32_t text = uint32_t(int32_t(at) + int16_t(rom.read16(at)));
+            for (uint32_t p = text; p < rom.file_size && name.size() <= kLongest; ++p) {
+                const uint8_t ch = rom.data[p];
+                if (!ch) { ok = true; break; }
+                if (ch < 0x20 || ch > 0x7E) break;
+                name.push_back(char(ch));
+            }
+        }
+        while (!name.empty() && name.back() == ' ') name.pop_back();
+        names.push_back(ok && name.size() <= kLongest ? name : std::string(kCharacters[id]));
+    }
+    return names;
+}
+
+bool is_placeholder_name(const std::string& name) {
+    return name.find_first_not_of('*') == std::string::npos;
 }
 
 bool has_level(int place, int level) {

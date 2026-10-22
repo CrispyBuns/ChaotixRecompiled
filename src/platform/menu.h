@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "platform/ui.h"
@@ -53,6 +54,9 @@ public:
     };
 
     void set_hooks(Hooks h) { hooks_ = std::move(h); }
+    // TIME ATTACK's character names, by id (stage_select::character_names,
+    // read from the ROM); without them, stage_select::kCharacters.
+    void set_character_names(std::vector<std::string> names) { characters_ = std::move(names); }
     // The settings the options page edits. Must outlive the menu.
     void bind(Config& cfg) { cfg_ = &cfg; }
 
@@ -146,6 +150,7 @@ private:
     bool keys_pad_ = false;        // and whether it is their gamepad or keyboard
     std::string awaiting_;         // button being rebound, empty when not capturing
     bool confirm_reset_ = false;   // the reset row is asking a second time
+    std::vector<std::string> characters_;  // see set_character_names
     std::vector<Item> items_;
     int selected_ = 0;
     int scroll_ = 0;          // achievements page
