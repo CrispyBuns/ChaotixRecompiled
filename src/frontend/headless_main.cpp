@@ -150,6 +150,7 @@ std::string compare_machines(const Machine& a, const Machine& b) {
     if (!(r = mem("32X FB1", a.mars.fb[1], b.mars.fb[1], sizeof a.mars.fb[1])).empty()) return r;
     if (!(r = mem("32X palette", a.mars.pal, b.mars.pal, sizeof a.mars.pal)).empty()) return r;
     if (!(r = mem("32X comm", a.mars.comm, b.mars.comm, sizeof a.mars.comm)).empty()) return r;
+    if (!(r = mem("cartridge SRAM", a.sram, b.sram, sizeof a.sram)).empty()) return r;
     if (!(r = mem("output image", a.framebuffer, b.framebuffer, sizeof a.framebuffer)).empty()) return r;
     return "";
 }
@@ -751,6 +752,11 @@ int main(int argc, char** argv) {
         ref->wide_everywhere = wide_everywhere;
         ref->wide_hud_edges = hud_edges;
         ref->vdp.tiles = m->vdp.tiles;  // the same picture, so the output images compare too
+        // The same save and the same pad, or the two part at the first
+        // DATA LOAD or the first read of the controller.
+        std::copy(m->sram, m->sram + sizeof m->sram, ref->sram);
+        ref->input.six_button[0] = m->input.six_button[0];
+        ref->input.six_button[1] = m->input.six_button[1];
         // Its own recorder: the interpreter must record the same draws as
         // the recompiled code (compared every frame below).
         // With the same replacements, so that its pictures compare too.
@@ -837,7 +843,7 @@ int main(int argc, char** argv) {
     int sprites_dumped = 0;
     uint64_t sprite_others_changed = 0;  // --sprites-check with a pack: see check_composed_others
     double worst_ms = 0;
-    uint64_t worst_frame = 0, slow_frames = 0, sram_frames = 0;
+    uint64_t worst_frame = 0, slow_frames = 0, sram_frames = 0, sram_last = 0;
     auto t0 = std::chrono::steady_clock::now();
     for (uint64_t f = 0; f < frames; ++f) {
         uint16_t btn = 0;
@@ -934,7 +940,7 @@ int main(int argc, char** argv) {
             if (ms > 8.0) ++slow_frames;
             // And how often the save changed: the frontend writes it to disk
             // a second after a change.
-            if (m->sram_dirty) { ++sram_frames; m->sram_dirty = false; }
+            if (m->sram_dirty) { ++sram_frames; sram_last = f; m->sram_dirty = false; }
         }
         if (!music_dir.empty()) music.after_frame(*m, first_sample);
         if (m->wide_active) {
@@ -1102,6 +1108,11 @@ int main(int argc, char** argv) {
         std::printf("widescreen: margins live for %llu frames in %d stretches\n",
                     (unsigned long long)wide_live_frames, wide_stretches);
     print_recomp_stats(*m);
+    // Whether the game saved, and when: tests check that a finished level
+    // reaches the cartridge save, and that a time attack run does not.
+    std::printf("save RAM changed on %llu frames", (unsigned long long)sram_frames);
+    if (sram_frames) std::printf(", the last at frame %llu", (unsigned long long)sram_last);
+    std::printf("\n");
     if (profile) {
 
         static const char* names[PROF_COUNT] = {"68K", "Z80", "MSH2", "SSH2", "video", "audio/pwm"};
@@ -1112,7 +1123,6 @@ int main(int argc, char** argv) {
         std::printf(" | total %.3f\n", total / 1e6 / double(frames));
         std::printf("worst frame %.3f ms (frame %llu), %llu frames over 8 ms\n", worst_ms,
                     (unsigned long long)worst_frame, (unsigned long long)slow_frames);
-        std::printf("save RAM changed on %llu frames\n", (unsigned long long)sram_frames);
     }
     if (!wav_path.empty()) {
         if (write_wav(wav_path, wav, int(kAudioRate + 0.5))) std::printf("audio written to %s (%zu samples)\n", wav_path.c_str(), wav.size() / 2);

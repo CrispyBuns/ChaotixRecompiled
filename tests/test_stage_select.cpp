@@ -77,3 +77,14 @@ TEST(stage_select, applying_a_request_writes_what_the_games_own_start_writes) {
     apply(m, r);
     CHECK_EQ(m.wram[0xE05C], 0xFE);   // one player: both on the first pad
 }
+
+TEST(stage_select, a_requested_level_saves_to_no_data_slot) {
+    // The title screen leaves the DATA slot at 0, which is DATA 1; a level
+    // started from there must not save over it when it ends.
+    auto mp = std::make_unique<Machine>();
+    Machine& m = *mp;
+    m.wram[0xE01C] = 0;
+    m.wram[0xE01D] = 0;
+    apply(m, Request{});
+    CHECK_EQ(rd16(m, 0xE01C), 0xFFFF);
+}

@@ -22,6 +22,8 @@
 //   FFE04C  PLAYERS while the menu is up; on start it selects FFE05C, which
 //           is the offset of the controller a player reads ($8A8778), so
 //           0x10 is what gives the partner to the second pad
+//   FFE01C  the DATA slot a finished level is saved to (0-3); the stage
+//           select's set-up ($8F6FD8) makes it -1, NO SAVE
 #pragma once
 #include <cstdint>
 #include <string>

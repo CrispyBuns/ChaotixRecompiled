@@ -349,6 +349,26 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
     set_tests_properties(time_attack_matches_what_the_player_saw PROPERTIES TIMEOUT 600
         PASS_REGULAR_EXPRESSION "the run ended after 2086 frames .0.34.66.")
 
+    # The end of a level saves the run to the DATA slot in FFE01C ($890FD2).
+    # The title screen leaves that at 0, DATA 1, so a time attack run saved
+    # itself over DATA 1 until the request made it NO SAVE, as the game's own
+    # stage select does. The same run finishes without touching the save...
+    add_test(NAME time_attack_leaves_the_save_alone
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 4700
+                --replay-input ${CMAKE_CURRENT_SOURCE_DIR}/recordings/finished_run.txt)
+    set_tests_properties(time_attack_leaves_the_save_alone PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "the run ended after 2086 frames.*save RAM changed on 0 frames")
+
+    # ...and played into DATA 1 it saves as it ends, through the routine the
+    # save code copies into work RAM, which only the interpreter runs; the
+    # recompiled code and the interpreter must agree on it, save included.
+    add_test(NAME lockstep_a_finished_level_saves_to_its_data_slot
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 4700 --lockstep
+                --replay-input ${CMAKE_CURRENT_SOURCE_DIR}/recordings/finished_run.txt
+                --poke 1000:E01C:00 --poke 1000:E01D:00)
+    set_tests_properties(lockstep_a_finished_level_saves_to_its_data_slot PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "save RAM changed on 1 frames, the last at frame 4639.*lockstep: 4700 frames bit-identical")
+
     # Long-running validation (-DCHAOTIX_LONG_TESTS=ON, ctest -L long): full attract sequence.
     if(CHAOTIX_LONG_TESTS)
     add_test(NAME lockstep_attract_long COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 36000 --lockstep)

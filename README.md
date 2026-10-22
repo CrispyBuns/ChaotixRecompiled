@@ -171,7 +171,8 @@ out of the game's own tables rather than invented here, and START uses the
 game's own route into a level, so a run behaves exactly as the console would.
 START goes straight there, in about a second: none of the game's own screens
 are passed through, only its level entry (the ball wipe and the BOTANIC BASE
-ticket).
+ticket). A run is played with NO SAVE, as the stage-select screen sets it, so
+it never touches your DATA slots.
 
 Every run is recorded, frame by frame, to `SaveData/last_run.txt`, and
 `chaotix_headless --replay-input` plays one back exactly. It is there because

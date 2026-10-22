@@ -33,6 +33,7 @@ enum : uint32_t {
     kRings = 0xE008,
     kSpecialLevel = 0xE01A,
     kSpecialPlayer = 0xE048,
+    kSaveSlot = 0xE01C,    // DATA slot the level end saves to; -1 is NO SAVE
 };
 
 constexpr uint16_t kModeLevel = 0x18;
@@ -98,6 +99,12 @@ bool valid(const Request& r) {
 }
 
 void apply(Machine& m, const Request& r) {
+    // The stage select's own set-up ($8F6FD8) makes the run NO SAVE before
+    // anything is chosen. Skipping it left the slot at the 0 the title
+    // screen has, which is DATA 1: the end of every level reached this way
+    // saved the run over DATA 1 ($890FD2), and once BACK TO TITLE kept the
+    // save that reached the disk.
+    wr16(m, kSaveSlot, 0xFFFF);
     wr16(m, kPlaceVar, r.place);
     wr16(m, kLevel, r.level);
     wr16(m, kAtTime, r.attime);
