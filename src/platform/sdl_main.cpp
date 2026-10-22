@@ -250,7 +250,14 @@ std::vector<std::string> rom_search_dirs(const App& app) {
     dirs.push_back(std::filesystem::path(app.store.root()) / "rom");
     // Desktop: the usual download/document folders. Mobile: the app's own
     // documents folder, which is what file managers expose.
-    for (SDL_Folder f : {SDL_FOLDER_DOWNLOADS, SDL_FOLDER_DOCUMENTS, SDL_FOLDER_DESKTOP})
+#ifdef SDL_PLATFORM_IOS
+    // An iOS app's own Downloads and Desktop are folders nobody can reach
+    // (SDL would create them); Documents is the one the Files app shows.
+    const SDL_Folder folders[] = {SDL_FOLDER_DOCUMENTS};
+#else
+    const SDL_Folder folders[] = {SDL_FOLDER_DOWNLOADS, SDL_FOLDER_DOCUMENTS, SDL_FOLDER_DESKTOP};
+#endif
+    for (SDL_Folder f : folders)
         if (const char* p = SDL_GetUserFolder(f)) {
             dirs.push_back(std::filesystem::path(p));
             dirs.push_back(std::filesystem::path(p) / "Chaotix");
@@ -1050,6 +1057,12 @@ int main(int argc, char** argv) {
         else if (a == "--install" && i + 1 < argc) install_path = argv[++i];
     }
     if (!user_dir.empty() && user_dir.back() != '/' && user_dir.back() != '\\') user_dir += '/';
+#ifdef SDL_PLATFORM_IOS
+    // iOS: the app's Documents, which the Files app and Finder show (the
+    // Info.plist shares it), so the ROM, saves, settings and Mods are there.
+    if (user_dir.empty())
+        if (const char* documents = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS)) user_dir = documents;
+#endif
     if (user_dir.empty()) {
         char* pref = SDL_GetPrefPath("ChaotixRecompiled", "ChaotixRecompiled");
         user_dir = pref ? pref : "./";

@@ -1,0 +1,42 @@
+Knuckles' Chaotix Recompiled @VERSION@ for macOS (Apple Silicon)
+==================================================================
+
+A static recompilation of the Sega 32X game Knuckles' Chaotix into a native
+Mac program. It contains NO game data: on the first start it asks for your
+own ROM of Knuckles' Chaotix (Japan, USA), SHA-1
+0c2fff7bc79ed26507c08ac47464c3af19f7ced7. Read LEGAL.md.
+
+Requires macOS 11 or later on an Apple Silicon Mac.
+
+FIRST START
+-----------
+The app is signed ad hoc, not notarised by Apple, so macOS refuses to open it
+the first time it is double-clicked. To open it anyway:
+
+  1. Move ChaotixRecompiled.app where you want it (Applications, say).
+  2. Right-click (or Control-click) it, choose Open, then Open again.
+  3. On macOS 15 and later that dialog may only offer "Done": open
+     System Settings > Privacy & Security, scroll down to the message about
+     ChaotixRecompiled and click "Open Anyway".
+
+Alternatively, in Terminal:  xattr -dr com.apple.quarantine ChaotixRecompiled.app
+
+The setup page lists the ROMs it finds in Downloads, Documents and on the
+Desktop (macOS asks once whether it may look there); Browse opens a file
+dialog, and a ROM dropped onto the window works too. The ROM is verified and
+copied, so the original is not needed afterwards.
+
+WHERE THINGS ARE
+----------------
+  ~/Library/Application Support/ChaotixRecompiled/ChaotixRecompiled/
+      Config/chaotix.ini   settings
+      SaveData/            the game's saves
+      Game/                the installed copy of your ROM
+      Mods/                music, textures, characters, ROM patches, touch images
+
+In Finder: Go > Go to Folder... and paste the path above.
+
+Keys, pads and the menu are described in README.md. Licences: LICENSE (the
+project), THIRD_PARTY.md and licenses/ (SDL, SDL_ttf, FreeType, HarfBuzz,
+plutosvg and the fonts, all linked into the program).
+Source and issues: https://github.com/YuutaTsubasa/ChaotixRecompiled
