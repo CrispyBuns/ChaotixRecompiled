@@ -15,6 +15,7 @@
 #include "renderer/image_io.h"
 #include "runtime/log.h"
 #include "renderer/sprite_pack.h"
+#include "renderer/sprite_sheet.h"
 #include "renderer/tile_pack.h"
 #include "runtime/patches.h"
 #include "runtime/sprite_record.h"
@@ -342,6 +343,7 @@ int main(int argc, char** argv) {
     bool hud_edges = false;        // the HUD at the widened picture's edge
     int debug_layer = 0;
     std::string tiles_dir, dump_tiles_dir;
+    std::string export_sheets_dir;  // --export-sheets DIR: every frame of each bank, after the run
     std::vector<std::string> patch_files;  // --patch FILE: IPS/BPS applied to the ROM in memory
     std::vector<cheats::Write> cheat_writes;  // --cheat, set before every frame
     uint64_t wide_live_frames = 0;
@@ -466,6 +468,10 @@ int main(int argc, char** argv) {
         // the dump of both kinds drawn (--dump-tiles is its older name).
         else if (a == "--tiles") tiles_dir = next();
         else if (a == "--dump-graphics" || a == "--dump-tiles") dump_tiles_dir = next();
+        // Whole-bank sprite sheets (renderer/sprite_sheet.h): the characters'
+        // banks from the ROM, and the banks the scene has loaded at the end of
+        // the run.
+        else if (a == "--export-sheets") export_sheets_dir = next();
         else if (a == "--layer") debug_layer = next() == "md" ? 1 : 2;  // md | 32x: one layer in the shots
         else if (a == "--sprites") want_sprites = true;
         else if (a == "--sprites-check") want_sprites = sprites_check = true;
@@ -1046,6 +1052,12 @@ int main(int argc, char** argv) {
     if (sprites_check && m->sprites->pack())
         std::printf("sprites check: %llu bytes of polygons and fills shown changed by the replacements\n",
                     (unsigned long long)sprite_others_changed);
+    if (!export_sheets_dir.empty()) {
+        std::vector<std::string> messages;
+        const int n = export_sprite_sheets(*m, export_sheets_dir, &messages);
+        for (const auto& msg : messages) std::printf("sheets: %s\n", msg.c_str());
+        std::printf("sheets: %d written to %s\n", n, export_sheets_dir.c_str());
+    }
     if (!coverage_path.empty()) {
         if (cov.save(coverage_path)) std::printf("coverage written to %s (%zu entries)\n", coverage_path.c_str(), cov.size());
     }
