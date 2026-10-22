@@ -269,6 +269,14 @@ instead, in the game's palette, wherever the game uses it. Only the picture
 changes: the game runs exactly as without the mod. Details:
 [docs/TEXTURE_MODS.md](docs/TEXTURE_MODS.md).
 
+To redraw a whole character, OPTIONS > EXTRAS > EXPORT SPRITES writes every
+frame of each character's sprite banks, without playing, as one sheet per
+bank to `Mods/Textures/Sheets`: `32x_<bank>.png`, the frames side by side in
+a grid, and `32x_<bank>.txt`, where each frame is. A sheet and its `.txt`
+copied into `Mods/Textures` replace every frame of that bank at once; a
+frame's own `32x_<bank>_<frame>.png` still wins over its cell
+(`chaotix_headless --export-sheets DIR` does the same from the command line).
+
 ## Music replacement
 
 Put WAV files in `Mods/Music` (see above for where `Mods` is),

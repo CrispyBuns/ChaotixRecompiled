@@ -114,6 +114,111 @@ Known limits:
   the title, is shown as the game drew it: a picture is composed only when
   it was followed from its start.
 
+## Whole banks as sheets: `32x_<bank>.png` with `32x_<bank>.txt`
+
+A character is over a hundred frames in two banks (its body in bank C, the
+tether hand, ring and extra pieces in bank C+8; [CHARACTERS.md](CHARACTERS.md)
+has the banks), and the dump writes only what the game happened to draw. A
+sheet is every frame of a bank in one image, side by side.
+
+1. **Export.** OPTIONS > EXTRAS > EXPORT SPRITES (it works from the front
+   end, without playing) writes a sheet for each bank that has graphics to
+   `Mods/Textures/Sheets`; the log says what was written. From the command
+   line, `chaotix_headless --rom ROM --frames 0 --export-sheets DIR` does the
+   same (after the run, so with `--stage` and `--frames` it also gets that
+   scene's banks).
+   - The characters' banks 00-0f are read straight from the ROM (the game
+     draws them from there as they are): fourteen sheets, as banks 01 and 09
+     are empty. A ROM patch's graphics are exported as patched.
+   - Other banks (objects, the HUD, the title) are compressed in the ROM and
+     unpacked into SDRAM when a scene starts, so only the ones the scene
+     running at that moment has loaded can be exported, from memory; they
+     come along with the characters' (export from the pause menu in a level
+     to get that level's). Their colours are the 32X palette at that moment,
+     with no colour offset.
+2. **Edit.** Copy a sheet and its `.txt` into `Mods/Textures` and edit the
+   PNG in an editor that keeps it palette-indexed, as with single files.
+3. **Load.** Each cell of a graphic replaces that frame, exactly as a
+   `32x_<bank>_<frame>.png` of the cell would. A cell left as exported draws
+   exactly the original. A frame's own file in `Mods/Textures` overrides its
+   cell, so a sheet and a few single files can be mixed.
+
+**The layout.** Cells sit sixteen to a row, so frame `0xRC` is in row R,
+column C (frame 0x51 is the second cell of the sixth row). All cells of a
+sheet are one size, the union of the bank's boxes around the hotspot, and the
+hotspot is at the same place in every cell: the frames of an animation line
+up as they do in the game, and flipping between cells shows the motion. Cells
+fitted to each graphic's box would make a smaller image, but they would no
+longer line up, and a modder would have to work out each frame's offset.
+
+- Index **0** is transparent, as in single files.
+- Index **0xFF** (magenta) is the 1-pixel grid between cells and fills the
+  cells of empty slots (`FFFFFFFF` in the bank's frame table).
+- Index **0xFE** (dark slate) fills each cell outside its graphic's box: the
+  room the graphic can grow into.
+- Indices 1 to 0x7F are the graphic's own pixel values, as in single files.
+  A character's sheet shows them in the character's colours as the player
+  (pixel p in the character's colour p, read from the ROM's table at
+  0x0018E4); values above 18, which some of Mighty's frames use, are greys.
+
+0xFE and 0xFF are not values the game's graphics use (they stay below 0x80),
+and both read as transparent when a sheet is loaded, so they cannot be used
+as pixel values in a sheet (a single file can).
+
+**How a cell becomes a replacement.** The graphic's box (where the original
+is drawn in the cell) is the replacement, the same size as the original.
+Pixels painted to the right of the box or below it, inside the cell, make the
+replacement larger from the same top-left corner, the way a larger single
+file grows. Pixels painted to the left of the box or above it are left out,
+with a line in the log: a replacement cannot grow that way. Everything else
+(the colour offsets, flips, scaling, the 127-pixel limit) is as for single
+files.
+
+**The description** is lines of words; `#` starts a comment. From
+`32x_00.txt` (Mighty), with one line of `32x_0a.txt`:
+
+```
+chaotix-sprite-sheet 1
+bank 00
+size 817 391
+cell 50 64
+hotspot 24 40
+frame 00 1 1 50 64 -12 14 -18 19
+frame 08 409 1 50 64 empty
+frame 22 95 89 46 43 same 14
+```
+
+- `size W H`: the sheet in pixels; `cell W H`: one cell; `hotspot X Y`: the
+  hotspot's place in every cell, from its top-left pixel.
+- `frame FF X Y W H x0 x1 y0 y1`: frame FF's cell (its top-left pixel X, Y in
+  the sheet and its size), and the graphic's box around the hotspot: columns
+  x0 to x1 - 1 and lines y0 to y1, as the graphic's header has them (lines
+  divided by 256). The box therefore starts at (X + hotspot X + x0,
+  Y + hotspot Y + y0) and is `x1 - x0` by `y1 - y0 + 1` pixels.
+- `frame FF X Y W H empty`: an empty slot.
+- `frame FF X Y W H same GG`: the slot holds the same graphic as frame GG
+  (Knuckles' bank 0a frames 22 and 23 repeat 14 and 15). The game's graphic
+  is named by its first slot, so it is replaced through GG's cell; this cell
+  shows it but is not read.
+
+A sheet whose description is missing, malformed (an unknown entry, a frame
+described twice, a box outside its cell, a cell outside the sheet), for
+another bank than its name, or whose image is not the described size or not
+palette-indexed is not loaded, with a line in the log saying why.
+
+Known limits:
+
+- A sheet is read whole: every cell of a graphic is loaded as a replacement,
+  so a scene with a character from a sheet is composed again every picture,
+  at the cost of replacing the scene's sprites (below), even where no cell
+  was changed.
+- A few graphics in SDRAM are rewritten by the game while the scene runs (in
+  Botanic Base, the background picture of bank 51 changes its pixel values),
+  so a sheet exported at one moment shows them as they were then, and
+  loading it freezes them; single files have the same limit.
+- The editor must keep the sheet's indices: one that re-orders or merges the
+  palette when saving changes the pixel values.
+
 ## Validation
 
 - `tile_replace.*` unit tests: sprite and plane tiles replaced, transparency,
@@ -140,6 +245,24 @@ Known limits:
   the pack on both machines. A pack with every sprite pixel changed changes
   the 32X layer in most frames, leaves the Mega Drive layer as it was, leaves
   every byte that polygons and fills drew last as it was, and keeps lockstep.
+- `sprite_sheet.*` unit tests (a hand-built ROM image): a bank read with its
+  empty and repeated slots and its colours; the layout, its description and
+  back; every cell as exported giving back the original graphic (and, as a
+  replacement, exactly the original bytes); cells growing right and down and
+  not left or up; malformed descriptions, a missing description, another
+  bank's, a full-colour or wrongly sized sheet refused; single files
+  overriding cells.
+- `sprite_sheets` (with the ROM): the fourteen character sheets exported
+  from the ROM without playing, loaded unchanged, give exactly the original
+  pictures in Botanic Base 1 (Knuckles and Espio, widescreen and 4:3) and the
+  lobby, with lockstep holding; Knuckles' sheet recoloured changes the level
+  with him in most pictures, in lockstep, and a level with Mighty and Espio
+  not at all.
+- By hand: the sheets exported at frame 900 of Botanic Base 1 (the 14
+  character sheets and 27 of the level's SDRAM banks, 1439 replacements),
+  loaded, 3000 frames with random input in the level and the lobby, in
+  widescreen and 4:3: lockstep bit-identical, `--sprites-check` 0 mismatches,
+  no byte of polygons and fills changed.
 - The cost, Botanic Base 1 in widescreen with random input (about 1.45 ms a
   frame without mods): a sprite pack loaded but none of its graphics in the
   scene, about 0.08 ms a frame (recording the draws and following the frame

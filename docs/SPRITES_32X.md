@@ -344,6 +344,10 @@ change the widescreen picture without replacements too.
 
 `chaotix_headless --tiles DIR` loads the sprite pack (`32x_*.png`) along with
 the tiles, and `--dump-graphics DIR` (or `--dump-tiles`) dumps both kinds.
+`--export-sheets DIR` writes whole banks as sheets (`renderer/sprite_sheet.*`,
+TEXTURE_MODS.md): the characters' banks from the ROM's bank table at
+0x020A0000, read with the recorder's rules for where a frame table ends, and
+the banks the scene has in SDRAM at the end of the run.
 
 High-resolution replacements need the compositor to output more than 320
 pixels, which is a separate step.
