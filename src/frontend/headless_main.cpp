@@ -14,9 +14,11 @@
 #include "game/recomp_dispatch.h"
 #include "renderer/image_io.h"
 #include "runtime/log.h"
+#include "renderer/sprite_pack.h"
 #include "renderer/tile_pack.h"
 #include "runtime/patches.h"
 #include "runtime/sprite_record.h"
+#include "runtime/sprite_replace.h"
 #include "runtime/tile_replace.h"
 #include "frontend/time_attack.h"
 #include "runtime/system.h"
@@ -161,7 +163,7 @@ std::string compare_sprite_lists(const SpriteList& a, const SpriteList& b) {
         const SpriteDraw& y = b.draws[i];
         const bool same = x.graphic == y.graphic && x.source == y.source && x.x == y.x && x.y == y.y && x.flags == y.flags &&
                           x.sx == y.sx && x.sy == y.sy && x.kind == y.kind && x.warp == y.warp && x.colour == y.colour && x.bank == y.bank &&
-                          x.frame == y.frame && x.hash == y.hash && x.size == y.size &&
+                          x.frame == y.frame && x.route == y.route && x.hash == y.hash && x.size == y.size &&
                           std::memcmp(&x.clip, &y.clip, sizeof x.clip) == 0 &&
                           std::equal(a.bytes(x), a.bytes(x) + x.size, b.bytes(y));
         if (!same) {
@@ -459,8 +461,11 @@ int main(int argc, char** argv) {
         else if (a == "--wide-everywhere") wide_everywhere = true;
         else if (a == "--hud-edges") hud_edges = true;
         else if (a == "--patch") patch_files.push_back(next());
-        else if (a == "--tiles") tiles_dir = next();            // tile replacements (md_<hash>.png)
-        else if (a == "--dump-tiles") dump_tiles_dir = next();  // write the tiles drawn here
+        // Graphics replacements, as the frontend's Mods/Textures: Mega Drive
+        // tiles (md_<hash>.png) and 32X sprites (32x_*.png) from DIR; and
+        // the dump of both kinds drawn (--dump-tiles is its older name).
+        else if (a == "--tiles") tiles_dir = next();
+        else if (a == "--dump-graphics" || a == "--dump-tiles") dump_tiles_dir = next();
         else if (a == "--layer") debug_layer = next() == "md" ? 1 : 2;  // md | 32x: one layer in the shots
         else if (a == "--sprites") want_sprites = true;
         else if (a == "--sprites-check") want_sprites = sprites_check = true;
@@ -608,9 +613,22 @@ int main(int argc, char** argv) {
         for (const auto& msg : messages) std::printf("tiles: %s\n", msg.c_str());
         m->vdp.tiles->dumping = !dump_tiles_dir.empty();
     }
+    // 32X sprite replacements from the same folder; the recorder is only
+    // installed when there are some, or for dumping.
+    std::shared_ptr<SpritePack> sprite_pack;
+    if (!tiles_dir.empty()) {
+        sprite_pack = std::make_shared<SpritePack>();
+        std::vector<std::string> messages;
+        std::printf("sprites: %d replacement(s) loaded\n", load_sprite_pack(*sprite_pack, tiles_dir, &messages));
+        for (const auto& msg : messages) std::printf("sprites: %s\n", msg.c_str());
+        if (sprite_pack->empty()) sprite_pack = nullptr;
+    }
+    if (sprite_pack || !dump_tiles_dir.empty()) want_sprites = true;
     if (want_sprites) {
         m->sprites = std::make_shared<SpriteRecorder>();
         m->sprites->track_writes = sprites_check;
+        m->sprites->set_pack(sprite_pack);
+        m->sprites->dumping = !dump_tiles_dir.empty();
     }
     if (six_button >= 0) m->input.six_button[0] = m->input.six_button[1] = six_button != 0;
     if (!sram_path.empty()) {
@@ -644,7 +662,11 @@ int main(int argc, char** argv) {
         ref->vdp.tiles = m->vdp.tiles;  // the same picture, so the output images compare too
         // Its own recorder: the interpreter must record the same draws as
         // the recompiled code (compared every frame below).
-        if (want_sprites) ref->sprites = std::make_shared<SpriteRecorder>();
+        // With the same replacements, so that its pictures compare too.
+        if (want_sprites) {
+            ref->sprites = std::make_shared<SpriteRecorder>();
+            ref->sprites->set_pack(sprite_pack);
+        }
         if (!rs.active) std::printf("warning: --lockstep without generated code compares the interpreter with itself\n");
     }
     audio::MusicMods music;
@@ -721,6 +743,8 @@ int main(int argc, char** argv) {
     SpriteCanvas sprite_canvas;
     SpriteCheck sprite_total;
     uint64_t sprites_key = ~0ull, sprite_pictures = 0, sprite_bad_pictures = 0;
+    int sprites_dumped = 0;
+    uint64_t sprite_others_changed = 0;  // --sprites-check with a pack: see check_composed_others
     double worst_ms = 0;
     uint64_t worst_frame = 0, slow_frames = 0, sram_frames = 0;
     auto t0 = std::chrono::steady_clock::now();
@@ -810,6 +834,7 @@ int main(int argc, char** argv) {
         const auto frame_t0 = std::chrono::steady_clock::now();
         m->run_frame();
         if (!dump_tiles_dir.empty() && m->vdp.tiles) write_tile_dumps(*m->vdp.tiles, dump_tiles_dir);
+        if (!dump_tiles_dir.empty() && m->sprites) sprites_dumped += write_sprite_dumps(*m->sprites, dump_tiles_dir);
         {
             // The worst frames, not just the average: a stall now and then
             // shows up as lag even when the average is far below 16 ms.
@@ -909,6 +934,7 @@ int main(int argc, char** argv) {
                     ++sprite_bad_pictures;
                     if (sprite_bad_pictures <= 8) report_sprite_mismatch(*m, r, shown);
                 }
+                if (m->sprites->pack()) sprite_others_changed += check_composed_others(*m, *m->sprites);
             }
         }
         if (nat && centre_compare) {
@@ -1007,6 +1033,9 @@ int main(int argc, char** argv) {
         std::printf("sprites: %llu draws recorded (%llu not in the bank table, %llu unreadable), %llu flips\n",
                     (unsigned long long)sr.draws_recorded, (unsigned long long)sr.unknown_graphics,
                     (unsigned long long)sr.bad_graphics, (unsigned long long)sr.flips);
+        if (sr.pack())
+            std::printf("sprites: %llu pictures composed with replacements\n", (unsigned long long)sr.pictures_composed);
+        if (sr.dumping) std::printf("sprites: %d graphics dumped\n", sprites_dumped);
     }
     if (sprites_check)
         std::printf("sprites check: %llu pictures, %llu bytes compared, %llu mismatches (wrong %llu, missing %llu, extra %llu) in %llu pictures, %llu bytes drawn over by polygons or fills\n",
@@ -1014,6 +1043,9 @@ int main(int argc, char** argv) {
                     (unsigned long long)sprite_total.mismatches(), (unsigned long long)sprite_total.wrong,
                     (unsigned long long)sprite_total.missing, (unsigned long long)sprite_total.extra,
                     (unsigned long long)sprite_bad_pictures, (unsigned long long)sprite_total.covered);
+    if (sprites_check && m->sprites->pack())
+        std::printf("sprites check: %llu bytes of polygons and fills shown changed by the replacements\n",
+                    (unsigned long long)sprite_others_changed);
     if (!coverage_path.empty()) {
         if (cov.save(coverage_path)) std::printf("coverage written to %s (%zu entries)\n", coverage_path.c_str(), cov.size());
     }

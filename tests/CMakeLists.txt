@@ -20,6 +20,7 @@ add_executable(chaotix_tests
     test_tile_replace.cpp
     test_image_io.cpp
     test_sprite_record.cpp
+    test_sprite_replace.cpp
 )
 target_link_libraries(chaotix_tests PRIVATE chaotix_game chaotix_runtime)
 
@@ -66,6 +67,14 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_tile_pack.py"
                     $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
         set_tests_properties(tile_pack PROPERTIES TIMEOUT 900)
+        # 32X sprite replacement: the graphics dumped in a level, the title,
+        # the lobby, the bonus and the special stage, as a pack, change no
+        # picture, in widescreen and 4:3, and lockstep holds; changed ones
+        # change only the sprites.
+        add_test(NAME sprite_pack
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_sprite_pack.py"
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
+        set_tests_properties(sprite_pack PROPERTIES TIMEOUT 1800)
     endif()
     # Boot -> title -> menus -> DATA LOAD -> level, with gameplay input.
     set(_script
