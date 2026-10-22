@@ -5,6 +5,8 @@
 
 #include <cctype>
 #include <cstdio>
+#include <filesystem>
+#include <string>
 
 #include "frontend/config.h"
 #include "game/achievements.h"
@@ -305,6 +307,34 @@ TEST(menu, leaving_the_pause_menu_is_not_a_hand_over) {
     CHECK(menu.on_pad(SDL_GAMEPAD_BUTTON_EAST));
     CHECK(!menu.open());
     CHECK_EQ(closed, 0);
+}
+
+TEST(menu, dump_graphics_dumps_both_kinds_and_reads_its_older_name) {
+    Config cfg;
+    cfg.set_defaults();
+    Menu m;
+    m.bind(cfg);
+    open_category(m, "EXTRAS");
+    CHECK(select_row(m, "DUMP GRAPHICS"));
+    CHECK(!cfg.dump_graphics);
+    CHECK(m.on_key(SDLK_RIGHT));
+    CHECK(cfg.dump_graphics);
+    // Saved under its new name; a file from before (DumpTiles) still counts.
+    const std::string path = (std::filesystem::temp_directory_path() / "chaotix_test_dump.ini").string();
+    CHECK(cfg.save(path));
+    Config back;
+    back.set_defaults();
+    CHECK(back.load(path));
+    CHECK(back.dump_graphics);
+    if (FILE* f = std::fopen(path.c_str(), "w")) {
+        std::fputs("[Mods]\nDumpTiles = true\n", f);
+        std::fclose(f);
+    }
+    Config old;
+    old.set_defaults();
+    CHECK(old.load(path));
+    CHECK(old.dump_graphics);
+    std::remove(path.c_str());
 }
 
 TEST(menu, resetting_awards_asks_twice) {

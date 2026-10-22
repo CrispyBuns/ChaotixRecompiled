@@ -31,7 +31,9 @@ struct Config {
     // In widened levels, the HUD at the picture's left edge (issue #28).
     bool wide_hud = true;
     bool achievements = true;  // local achievement tracking (assets/achievements.ini)
-    bool dump_tiles = false;   // write each Mega Drive tile drawn to Mods/Textures/Dump (issue #35)
+    // Write each graphic drawn (Mega Drive tiles, 32X sprites) to
+    // Mods/Textures/Dump (issue #35).
+    bool dump_graphics = false;
     // [Audio]
     bool audio = true;
     int volume = 80;  // percent: everything

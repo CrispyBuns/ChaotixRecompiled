@@ -25,7 +25,10 @@
 #include "game/recomp_dispatch.h"
 #include "input/input.h"
 #include "input/touch_controls.h"
+#include "renderer/sprite_pack.h"
 #include "renderer/tile_pack.h"
+#include "runtime/sprite_record.h"
+#include "runtime/sprite_replace.h"
 #include "runtime/tile_replace.h"
 #include "renderer/image_io.h"
 #include "renderer/viewport.h"
@@ -41,6 +44,7 @@
 #include <map>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -73,8 +77,14 @@ struct App {
     // Touch control images from Mods/Touch (issue #25), by button name;
     // [0] as drawn, [1] while pressed. A missing one is drawn as before.
     std::map<std::string, std::array<SDL_Texture*, 2>> touch_skin;
-    std::string tiles_dir;  // Mods/Textures, for the tile dumps
+    std::string tiles_dir;  // Mods/Textures, for the graphics dumps
     std::shared_ptr<TileReplacer> tiles;  // set on the machine every frame (copies of it may hold an older one)
+    // 32X sprite replacements from the same folder, and the recorder that
+    // draws them; the recorder only exists while there is a pack or the
+    // dump is on, so a game without mods does not pay for it. Set on the
+    // machine every frame, like the tiles.
+    std::shared_ptr<const SpritePack> sprite_pack;
+    std::shared_ptr<SpriteRecorder> sprites;
     SDL_AudioStream* audio = nullptr;
     std::vector<SDL_Gamepad*> pads;
     TouchControls touch;
@@ -433,6 +443,9 @@ bool return_to_title(App& app) {
     app.ta.cancel();
     app.m->remap_m68k();
     app.m->remap_sh2();
+    // The sprite lists described the frame buffers just replaced.
+    app.m->sprites = app.sprites;
+    if (app.sprites) app.sprites->reset();
     app.handed_over = false;
     return true;
 }
@@ -679,21 +692,53 @@ void load_touch_skin(App& app, const std::string& dir) {
     if (loaded) LOGI("touch", "%d touch control image(s) from %s", loaded, dir.c_str());
 }
 
-// Mega Drive tile replacements (issue #35): Mods/Textures/md_<hash>.png. With
-// DUMP TILES on, each tile drawn is also written to Mods/Textures/Dump once.
+// Puts the 32X sprite recorder on the machine when it is needed (a sprite
+// pack, or the dump on) and takes it off when not: recording costs a little
+// every frame. Called every frame, as a copy of the machine put back (the
+// title snapshot) may carry another one.
+void update_sprite_recorder(App& app) {
+    const bool want = app.sprite_pack || app.cfg.dump_graphics;
+    if (!want) app.sprites.reset();
+    else if (!app.sprites) app.sprites = std::make_shared<SpriteRecorder>();
+    if (app.sprites) {
+        app.sprites->set_pack(app.sprite_pack);
+        app.sprites->dumping = app.cfg.dump_graphics;
+    }
+    if (app.m->sprites != app.sprites) app.m->sprites = app.sprites;
+}
+
+// Graphics replacements (issue #35), in Mods/Textures: Mega Drive tiles as
+// md_<hash>.png and 32X sprites as 32x_<bank>_<frame>.png or 32x_<hash>.png.
+// With DUMP GRAPHICS on, each one drawn is also written to Mods/Textures/Dump
+// once.
 void load_tiles(App& app) {
     const std::string dir = mods_root(app) + "Textures";
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
     const std::string readme = dir + "/README.txt";
-    if (!std::filesystem::exists(std::filesystem::u8path(readme), ec)) {
+    // Written when missing, and over the text of older versions, which knew
+    // only the tiles.
+    bool write_readme = !std::filesystem::exists(std::filesystem::u8path(readme), ec);
+    if (!write_readme) {
+        if (FILE* f = std::fopen(readme.c_str(), "r")) {
+            char first[64] = {};
+            write_readme = std::fgets(first, sizeof first, f) && std::strncmp(first, "Mega Drive tile replacements:", 29) == 0;
+            std::fclose(f);
+        }
+    }
+    if (write_readme) {
         if (FILE* f = std::fopen(readme.c_str(), "w")) {
-            std::fputs("Mega Drive tile replacements: backgrounds and level art.\n"
-                       "Turn on OPTIONS > EXTRAS > DUMP TILES and play: each 8x8 tile the game draws is\n"
-                       "saved once to the Dump folder as md_<hash>.png. Edit one (keep it 8x8 and\n"
-                       "palette-indexed: the colours are the game's palette, index 0 is transparent)\n"
-                       "and put it in this folder under the same name. It is drawn instead of the\n"
-                       "original wherever the game uses that tile.\n",
+            std::fputs("Graphics replacements. Turn on OPTIONS > EXTRAS > DUMP GRAPHICS and play: each\n"
+                       "graphic the game draws is saved once to the Dump folder. Edit one in an editor\n"
+                       "that keeps it palette-indexed (the colours are the game's palette, index 0 is\n"
+                       "transparent) and put it in this folder under the same name. It is drawn instead\n"
+                       "of the original wherever the game uses it.\n"
+                       "\n"
+                       "md_<hash>.png: Mega Drive tiles (backgrounds, level art). Keep them 8x8.\n"
+                       "32x_<bank>_<frame>.png, 32x_<hash>.png: 32X sprites (characters, the HUD,\n"
+                       "objects, the title). The image's top-left corner stays where the original's\n"
+                       "was; another size is drawn at its own size from there. The colour offsets the\n"
+                       "game gives the characters still apply, so keep to the indices the dump uses.\n",
                        f);
             std::fclose(f);
         }
@@ -703,10 +748,18 @@ void load_tiles(App& app) {
     const int n = load_tile_pack(*tiles, dir, &messages);
     for (const auto& m : messages) LOGW("tiles", "%s", m.c_str());
     if (n) LOGI("tiles", "%d tile replacement(s) from %s", n, dir.c_str());
-    tiles->dumping = app.cfg.dump_tiles;
+    tiles->dumping = app.cfg.dump_graphics;
     app.tiles_dir = dir;
     app.tiles = tiles;
     app.m->vdp.tiles = tiles;
+
+    auto pack = std::make_shared<SpritePack>();
+    messages.clear();
+    const int sn = load_sprite_pack(*pack, dir, &messages);
+    for (const auto& m : messages) LOGW("sprites", "%s", m.c_str());
+    if (sn) LOGI("sprites", "%d sprite replacement(s) from %s", sn, dir.c_str());
+    app.sprite_pack = sn ? pack : nullptr;
+    update_sprite_recorder(app);
 }
 
 // Music and touch images from the Mods folder; again when that folder has
@@ -1375,8 +1428,13 @@ int main(int argc, char** argv) {
         if (app.fast_forward) accumulator = 0;
         if (app.m->vdp.tiles != app.tiles) app.m->vdp.tiles = app.tiles;
         if (TileReplacer* t = app.tiles.get()) {
-            t->dumping = app.cfg.dump_tiles;
+            t->dumping = app.cfg.dump_graphics;
             if (const int n = write_tile_dumps(*t, app.tiles_dir + "/Dump")) LOGI("tiles", "%d tile(s) dumped", n);
+        }
+        if (!app.tiles_dir.empty()) {
+            update_sprite_recorder(app);
+            if (app.sprites)
+                if (const int n = write_sprite_dumps(*app.sprites, app.tiles_dir + "/Dump")) LOGI("sprites", "%d sprite(s) dumped", n);
         }
         uint64_t emu_t1 = SDL_GetPerformanceCounter();
         if (steps) app.timing.emu_ms = double(emu_t1 - emu_t0) * 1000.0 / double(freq) / steps;
