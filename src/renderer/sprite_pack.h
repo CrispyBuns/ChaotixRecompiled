@@ -19,8 +19,11 @@ std::string sprite_file_name(int bank, int frame, uint64_t hash);
 
 // Loads every 32x_*.png in `dir` into `pack`. A replacement must be a
 // palette-indexed PNG (as the dumps are) whose indices are the graphic's own
-// pixel values before the colour offset; 0 is transparent. Returns how many
-// were loaded; `messages` says why any file was skipped.
+// pixel values before the colour offset; 0 is transparent. Whole-bank sheets
+// (32x_<BB>.png with 32x_<BB>.txt, sprite_sheet.h) are loaded too, each cell
+// as its frame's replacement, and a frame's own file overrides its cell.
+// Returns how many graphics have a replacement; `messages` says why any file
+// was skipped.
 int load_sprite_pack(SpritePack& pack, const std::string& dir, std::vector<std::string>* messages);
 
 // Writes the graphics the recorder has collected for dumping to `dir`

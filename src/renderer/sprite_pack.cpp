@@ -1,6 +1,7 @@
 #include "sprite_pack.h"
 
 #include "image_io.h"
+#include "sprite_sheet.h"
 #include "runtime/sprite_record.h"
 #include "runtime/sprite_replace.h"
 
@@ -40,12 +41,16 @@ int load_sprite_pack(SpritePack& pack, const std::string& dir, std::vector<std::
     auto say = [messages](std::string m) { if (messages) messages->push_back(std::move(m)); };
     namespace fs = std::filesystem;
     std::error_code ec;
-    int loaded = 0;
+    // Whole-bank sheets first (sprite_sheet.h), so that a graphic's own file
+    // overrides its cell.
+    const size_t before = pack.size();
+    load_sprite_sheets(pack, dir, messages);
     for (const auto& e : fs::directory_iterator(fs::u8path(dir), ec)) {
         const std::string name = e.path().filename().u8string();
         if (!e.is_regular_file(ec) || name.size() < 8 || name.compare(0, 4, "32x_") != 0 ||
             name.compare(name.size() - 4, 4, ".png") != 0)
             continue;
+        if (name.size() == 10) continue;  // 32x_<bank>.png, a sheet
         // 32x_BB_FF.png or 32x_<16 hex digits>.png.
         uint64_t bank = 0, frame = 0, hash = 0;
         const bool slot = name.size() == 13 && name[6] == '_';
@@ -75,9 +80,8 @@ int load_sprite_pack(SpritePack& pack, const std::string& dir, std::vector<std::
         s.px = img.indices;
         if (slot) pack.add(int(bank), int(frame), std::move(s));
         else pack.add(hash, std::move(s));
-        ++loaded;
     }
-    return loaded;
+    return int(pack.size() - before);
 }
 
 int write_sprite_dumps(SpriteRecorder& sprites, const std::string& dir) {

@@ -53,6 +53,7 @@ add_library(chaotix_runtime STATIC
     src/renderer/image_io.cpp
     src/renderer/tile_pack.cpp
     src/renderer/sprite_pack.cpp
+    src/renderer/sprite_sheet.cpp
     src/renderer/viewport.cpp
     src/frontend/setup.cpp
     src/frontend/time_attack.cpp
