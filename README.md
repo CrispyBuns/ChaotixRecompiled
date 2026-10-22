@@ -126,7 +126,19 @@ so nothing is extracted or shipped.
 
 OPTIONS is split into VIDEO (widescreen, aspect ratio, scaling, screen),
 SOUND (the volumes), INPUT (touch controls, 6-button pad) and EXTRAS (cheats,
-awards, and on Android the Mods folder).
+the menu's look, awards, and on Android the Mods folder).
+
+The menu is written in the game's own font -- the white digits and shaded
+yellow capitals of its TRAINING and DATA LOAD screens -- and shows the game's
+zones behind itself, a different one each time it opens, under a translucent
+coat of that zone's colour. Both are made from your ROM: the font is read
+from it at start-up, and each zone's picture is rendered once by the game
+itself, on a second machine in the background (a couple of seconds each on a
+PC, longer on a phone), then kept in the user data folder under
+`Cache/Backdrops`. Until a picture exists the menu is plain. OPTIONS > EXTRAS
+> MENU FONT (GAME / PIXEL) and MENU BACKGROUND (ZONE / PLAIN), `MenuFont` and
+`MenuBackground` in `[Video]`, bring back the earlier look. How it works:
+[docs/MENU_ART.md](docs/MENU_ART.md).
 
 START GAME hands the game control, and it proceeds into its own menus exactly
 as it would have on the console, so nothing the original offers is out of
