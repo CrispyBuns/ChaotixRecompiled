@@ -10,6 +10,7 @@
 // direct colour. Zero-byte suppression applies only to overwrite-image writes.
 #include "runtime/system.h"
 #include "runtime/patches.h"
+#include "runtime/sprite_record.h"
 
 namespace chaotix {
 
@@ -38,6 +39,11 @@ void Machine::render_line32x(int ln, uint32_t* all, int extra, bool wide_src) {
     if (mode == 0 || !(mars.adapter_ctrl & 1)) return;
     const bool pri = (mars.bitmap_mode & 0x80) != 0;
     const uint8_t* fb = mars.fb[mars.fb_display];
+    const uint8_t* shadow = fb_margin[mars.fb_display];
+    // Replacement graphics (runtime/sprite_replace.h): the same picture
+    // composed again with them, shown in place of the emulated buffer and
+    // its margins. Only what is shown; the machine keeps its own buffers.
+    if (sprites) sprites->shown(*this, fb, shadow);
     // Widescreen rows above/below the active area are not in the line table;
     // the level frame buffer is a uniform grid, so extrapolate from the edge.
     const int lt = ln < 0 ? 0 : (ln >= kActiveLines ? kActiveLines - 1 : ln);
@@ -49,13 +55,12 @@ void Machine::render_line32x(int ln, uint32_t* all, int extra, bool wide_src) {
         uint32_t p = base + (mars.screen_shift & 1);
         if (wide_src) {
             // Margins come from the host-side shadow (see Machine::fb_margin).
-            const uint8_t* sh = fb_margin[mars.fb_display];
+            const uint8_t* sh = shadow;
             for (int x = -extra; x < 0; ++x) all[x + extra] = encode_idx(sh[(p + uint32_t(x)) & 0x1FFFF], mars.pal, pri);
             for (int x = kNativeWidth; x < kNativeWidth + extra; ++x) all[x + extra] = encode_idx(sh[(p + uint32_t(x)) & 0x1FFFF], mars.pal, pri);
         }
         // Extended rows are entirely redirected to the shadow by the blitter.
-        const uint8_t* center = wide_src && (ln < 0 || ln >= kActiveLines)
-                              ? fb_margin[mars.fb_display] : fb;
+        const uint8_t* center = wide_src && (ln < 0 || ln >= kActiveLines) ? shadow : fb;
         for (int x = 0; x < kNativeWidth; ++x) out[x] = encode_idx(center[(p + uint32_t(x)) & 0x1FFFF], mars.pal, pri);
         break;
     }

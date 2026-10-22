@@ -18,11 +18,17 @@
 // rebuild_sprites() draws a list again host-side from the graphics' own data,
 // exactly as the blitters do; with nothing replaced, the result equals the
 // emulated frame buffer wherever the blitters wrote last (check_sprites()).
-// That rebuild is the path a replacement graphic will take.
+// That rebuild is the path a replacement graphic takes (sprite_replace.h):
+// with a pack set, the recorder also tracks what lies under each blitter
+// write, and composes the displayed picture again with the replacements.
 #pragma once
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace sh2 { struct State; }
@@ -30,6 +36,8 @@ namespace sh2 { struct State; }
 namespace chaotix {
 
 class Machine;
+class SpriteLayer;
+class SpritePack;
 
 // The clip rectangle at SDRAM 0x06003834 (int16 left/right in pixels, int32
 // top/bottom in lines x 256, bottom inclusive) and the scaled blitter's scale
@@ -57,6 +65,10 @@ struct SpriteDraw {
     uint8_t colour = 0;    // the recolour copy's offset, added to non-zero pixels
     int16_t bank = -1, frame = -1;  // in the bank table at 0x06003614; -1 if not there
     int16_t line = 0;               // the scanline the call was made on
+    // Where the call's bytes went (Machine::fb_write): 0 the frame buffer,
+    // 1 margins to the host-side shadow (a widened level), 2 the widened
+    // special stage (the shadow for picture lines only).
+    uint8_t route = 0;
     uint64_t hash = 0;     // FNV-1a of the source graphic's bytes
     SpriteClip clip;
     uint32_t data = 0, size = 0;  // the source graphic's bytes in SpriteList::pool
@@ -72,12 +84,57 @@ struct SpriteList {
     const uint8_t* bytes(const SpriteDraw& d) const { return pool.data() + d.data; }
 };
 
+// A graphic as an image: its box, x1 - x0 pixels by (y1 - y0) / 256 + 1
+// lines (the bottom line is inclusive), its top-left corner at (x0, y0 / 256)
+// from the hotspot, holding the graphic's own palette indices -- before the
+// colour offset and the palette-half flag. 0 is transparent.
+struct SpriteImage {
+    int width = 0, height = 0;
+    std::vector<uint8_t> px;  // row-major
+};
+
+// A graphic drawn, for dumping: its name (bank and frame, or the hash), its
+// pixels, and the 32X colours it was shown in (ARGB, palette[i] for pixel
+// value i, the colour offset and flag bit 2 applied; transparent entries 0).
+struct SpriteDump {
+    int16_t bank = -1, frame = -1;
+    uint64_t hash = 0;
+    SpriteImage image;
+    std::array<uint32_t, 256> palette{};
+};
+
 class SpriteRecorder {
 public:
+    SpriteRecorder();
+    ~SpriteRecorder();
+    SpriteRecorder(const SpriteRecorder&) = delete;
+    SpriteRecorder& operator=(const SpriteRecorder&) = delete;
+
     // Called by the machine: before a hooked SH-2 instruction, and when the
     // displayed frame buffer changes.
     void hook(const Machine& m, const sh2::State& c, uint32_t pc);
     void flipped(const Machine& m);
+    // Forgets every list, as if just installed: for a machine whose state
+    // was replaced (a snapshot restored), whose buffers the lists no longer
+    // describe.
+    void reset();
+
+    // Replacement graphics (sprite_replace.h). With a pack set, the writes
+    // into the frame buffer are tracked, and shown() gives the 32X layer to
+    // display: the emulated frame buffer and margin shadow, or -- when the
+    // displayed list draws a replaced graphic -- the same picture composed
+    // again with the replacements. Output only, like everything here.
+    void set_pack(std::shared_ptr<const SpritePack> pack);
+    const SpritePack* pack() const { return pack_.get(); }
+    void shown(const Machine& m, const uint8_t*& fb, const uint8_t*& margin);
+    uint64_t pictures_composed = 0;  // displayed lists drawn with replacements
+
+    // Dumping: each graphic drawn, once (by its name), into `pending` for
+    // the frontend to write.
+    bool dumping = false;
+    std::vector<SpriteDump> pending;
+    // Whether the machine must report frame buffer writes (fb_write/fb_fill).
+    bool tracks_writes() const { return track_writes || layer_ != nullptr; }
 
     // The list of the buffer on display, and of each buffer.
     const SpriteList& displayed(const Machine& m) const;
@@ -107,8 +164,15 @@ private:
     void lookup_bank(const Machine& m, uint32_t ptr, SpriteDraw& d);
     void rebuild_index(const Machine& m);
     static bool is_recoloured(const Machine& m, const Recolour& rc, uint32_t at);
+    void collect_dumps(const Machine& m, const SpriteList& list);
 
     SpriteList lists_[2];
+    std::shared_ptr<const SpritePack> pack_;
+    std::unique_ptr<SpriteLayer> layer_;
+    uint64_t shown_key_ = ~0ull;
+    bool shown_composed_ = false;
+    std::unordered_set<uint32_t> dumped_slots_;  // bank << 8 | frame
+    std::unordered_set<uint64_t> dumped_hashes_;
     std::vector<uint8_t> owner_[2] = {std::vector<uint8_t>(0x20000), std::vector<uint8_t>(0x20000)};
     uint8_t shadowed_[2] = {};
     Recolour recolour_;
@@ -136,6 +200,12 @@ struct SpriteCanvas {
 // for a call the blitters cannot make (flags 12-15) or a malformed graphic.
 bool rasterise_sprite(const SpriteDraw& d, const uint8_t* data, uint32_t size, SpriteCanvas& canvas,
                       const uint8_t* warp = nullptr);
+// The same, handing each byte the blitter would store (a frame buffer
+// offset and a non-zero value: zero bytes of the overwrite image are
+// transparent) to `sink` instead.
+using SpriteSink = void (*)(void* user, uint32_t offset, uint8_t value);
+bool rasterise_sprite(const SpriteDraw& d, const uint8_t* data, uint32_t size, SpriteSink sink, void* user,
+                      const uint8_t* warp = nullptr);
 void rebuild_sprites(const SpriteList& list, SpriteCanvas& canvas);
 
 // The self-test: the rebuild of the displayed buffer's list against the
@@ -154,6 +224,13 @@ struct SpriteCheck {
     uint64_t mismatches() const { return wrong + missing + extra; }
 };
 SpriteCheck check_sprites(const Machine& m, const SpriteRecorder& r, SpriteCanvas& canvas);
+
+// With a pack set and track_writes on: how many bytes of the displayed
+// picture that polygons or fills wrote last (or nothing wrote) the composed
+// picture shows otherwise. A replacement with the original's footprint must
+// leave them all; a larger one may legitimately cover a polygon drawn
+// before it.
+uint64_t check_composed_others(const Machine& m, SpriteRecorder& r);
 
 // One line per draw, for --sprites-log.
 std::string describe(const SpriteDraw& d);

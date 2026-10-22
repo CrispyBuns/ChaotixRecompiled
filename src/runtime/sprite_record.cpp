@@ -1,5 +1,6 @@
 #include "sprite_record.h"
 #include "patches.h"
+#include "sprite_replace.h"
 #include "cpu/sh2/sh2_ops.h"
 #include "system.h"
 #include <algorithm>
@@ -154,6 +155,7 @@ void SpriteRecorder::hook(const Machine& m, const sh2::State& c, uint32_t pc) {
     }
     const uint8_t* clip = m.sdram + kClipRect;
     d.line = int16_t(m.line);
+    d.route = m.wide_special ? 2 : m.wide_active ? 1 : 0;
     d.clip.left = int16_t(be16(clip));
     d.clip.right = int16_t(be16(clip + 2));
     d.clip.top = s32(be32(clip + 4));
@@ -198,18 +200,83 @@ void SpriteRecorder::hook(const Machine& m, const sh2::State& c, uint32_t pc) {
     ++draws_recorded;
 }
 
+SpriteRecorder::SpriteRecorder() = default;
+SpriteRecorder::~SpriteRecorder() = default;
+
 void SpriteRecorder::flipped(const Machine& m) {
     ++flips;
     const int back = (m.mars.fb_display ^ 1) & 1;
+    if (dumping) collect_dumps(m, lists_[back ^ 1]);
     lists_[back].clear();
     if (track_writes) std::fill(owner_[back].begin(), owner_[back].end(), uint8_t(kNone));
     shadowed_[back] = 0;
+    if (layer_) layer_->restart(back);
+}
+
+void SpriteRecorder::reset() {
+    for (int b = 0; b < 2; ++b) {
+        lists_[b].clear();
+        std::fill(owner_[b].begin(), owner_[b].end(), uint8_t(kNone));
+        shadowed_[b] = 0;
+        if (layer_) layer_->forget(b);
+    }
+    recolour_ = Recolour{};
+    shown_key_ = ~0ull;
+}
+
+void SpriteRecorder::set_pack(std::shared_ptr<const SpritePack> pack) {
+    if (pack && pack->empty()) pack = nullptr;
+    if (pack == pack_) return;
+    pack_ = std::move(pack);
+    shown_key_ = ~0ull;
+    // A layer starts with nothing tracked: the lists drawn before it are
+    // shown as they are until the next flip of each buffer.
+    if (!pack_) layer_.reset();
+    else if (!layer_) layer_ = std::make_unique<SpriteLayer>();
+    else layer_->clear_cache();
+}
+
+void SpriteRecorder::shown(const Machine& m, const uint8_t*& fb, const uint8_t*& margin) {
+    if (!layer_) return;
+    const int b = m.mars.fb_display & 1;
+    const SpriteList& list = lists_[b];
+    // A list does not change while its buffer is displayed: compose once.
+    const uint64_t key = list.serial << 1 | uint64_t(b);
+    if (key != shown_key_) {
+        shown_key_ = key;
+        shown_composed_ = layer_->compose(m, b, list, *pack_);
+        if (shown_composed_) ++pictures_composed;
+    }
+    if (!shown_composed_) return;
+    fb = layer_->fb();
+    margin = layer_->margin();
+}
+
+// Each graphic once, by its file name: the bank and frame where it has
+// them, the hash otherwise. Drawn with the palette as it is now, when the
+// picture goes on display.
+void SpriteRecorder::collect_dumps(const Machine& m, const SpriteList& list) {
+    for (const SpriteDraw& d : list.draws) {
+        if (!d.size) continue;
+        const bool fresh = d.bank >= 0 ? dumped_slots_.insert(uint32_t(d.bank) << 8 | uint32_t(d.frame)).second
+                                       : dumped_hashes_.insert(d.hash).second;
+        if (!fresh) continue;
+        SpriteDump dump;
+        dump.bank = d.bank;
+        dump.frame = d.frame;
+        dump.hash = d.hash;
+        if (!graphic_image(list.bytes(d), d.size, dump.image)) continue;
+        sprite_dump_palette(d, m.mars.pal, dump.palette.data());
+        pending.push_back(std::move(dump));
+    }
 }
 
 const SpriteList& SpriteRecorder::displayed(const Machine& m) const { return lists_[m.mars.fb_display & 1]; }
 
 void SpriteRecorder::fb_write(const Machine& m, uint32_t off, uint32_t v, int size, bool overwrite) {
     const int b = (m.mars.fb_display ^ 1) & 1;
+    if (layer_) layer_->write(m, b, off, v, size, overwrite, uint32_t(lists_[b].draws.size()));
+    if (!track_writes) return;
     uint8_t* own = owner_[b].data();
     if (m.wide_special) shadowed_[b] = 2;
     else if (m.wide_active) shadowed_[b] = 1;
@@ -228,6 +295,8 @@ void SpriteRecorder::fb_write(const Machine& m, uint32_t off, uint32_t v, int si
 
 void SpriteRecorder::fb_fill(const Machine& m, uint32_t addr, uint32_t words, uint16_t data) {
     const int b = (m.mars.fb_display ^ 1) & 1;
+    if (layer_) layer_->fill(m, b, addr, words, data, uint32_t(lists_[b].draws.size()));
+    if (!track_writes) return;
     uint8_t* own = owner_[b].data();
     auto other = [own](uint32_t o) { own[o & 0x1FFFF] = uint8_t((own[o & 0x1FFFF] & kSpriteEver) | kOther); };
     if (m.wide_special && (addr & 0xFF) == patches::kSpecialClearStart && words == patches::kSpecialClearLen + 1u && data == 0) {
@@ -318,13 +387,12 @@ namespace {
 // Writes through the frame buffer's overwrite image, where zero bytes are
 // transparent (the blitters' only target), as fb_write does.
 struct Writer {
-    SpriteCanvas& c;
+    SpriteSink sink;
+    void* user;
     void byte(uint32_t addr, uint8_t v) {
         const bool overwrite = (addr & 0x20000) != 0;
         if (overwrite && !v) return;
-        const uint32_t o = addr & 0x1FFFF;
-        c.px[o] = v;
-        c.cov[o] = 1;
+        sink(user, addr & 0x1FFFF, v);
     }
     void word(uint32_t addr, uint32_t v) {
         addr &= ~1u;
@@ -935,9 +1003,18 @@ bool blit_warped(const SpriteDraw& d, const Source& g, Writer& w, const uint8_t*
 } // namespace
 
 bool rasterise_sprite(const SpriteDraw& d, const uint8_t* data, uint32_t size, SpriteCanvas& canvas, const uint8_t* warp) {
+    auto put = [](void* user, uint32_t o, uint8_t v) {
+        SpriteCanvas& c = *static_cast<SpriteCanvas*>(user);
+        c.px[o] = v;
+        c.cov[o] = 1;
+    };
+    return rasterise_sprite(d, data, size, put, &canvas, warp);
+}
+
+bool rasterise_sprite(const SpriteDraw& d, const uint8_t* data, uint32_t size, SpriteSink sink, void* user, const uint8_t* warp) {
     if (!data || size < 10) return false;
     Source g{data, size, d.colour};
-    Writer w{canvas};
+    Writer w{sink, user};
     switch (d.kind) {
     case SpriteKind::Scaled: return blit_scaled(d, g, w);
     case SpriteKind::Warped: return blit_warped(d, g, w, warp);
@@ -978,6 +1055,25 @@ SpriteCheck check_sprites(const Machine& m, const SpriteRecorder& r, SpriteCanva
         }
     }
     return res;
+}
+
+uint64_t check_composed_others(const Machine& m, SpriteRecorder& r) {
+    const int b = m.mars.fb_display & 1;
+    const uint8_t* fb = m.mars.fb[b];
+    const uint8_t* shadow = m.fb_margin[b];
+    const uint8_t* cfb = fb;
+    const uint8_t* cshadow = shadow;
+    r.shown(m, cfb, cshadow);
+    if (cfb == fb && cshadow == shadow) return 0;
+    const uint8_t* own = r.owners(b);
+    const uint8_t mode = r.shadowed(b);
+    uint64_t changed = 0;
+    for (uint32_t o = 0; o < 0x20000; ++o) {
+        if ((own[o] & 3) == SpriteRecorder::kSprite) continue;
+        const bool sh = (mode == 1 && in_margin(o)) || (mode == 2 && in_picture(o) && in_margin(o));
+        if (sh ? cshadow[o] != shadow[o] : cfb[o] != fb[o]) ++changed;
+    }
+    return changed;
 }
 
 std::string describe(const SpriteDraw& d) {

@@ -43,6 +43,7 @@ add_library(chaotix_runtime STATIC
     src/runtime/vdp.cpp
     src/runtime/tile_replace.cpp
     src/runtime/sprite_record.cpp
+    src/runtime/sprite_replace.cpp
     src/renderer/compositor.cpp
     src/runtime/save.cpp
     src/audio/ym2612.cpp
@@ -51,6 +52,7 @@ add_library(chaotix_runtime STATIC
     src/audio/volumes.cpp
     src/renderer/image_io.cpp
     src/renderer/tile_pack.cpp
+    src/renderer/sprite_pack.cpp
     src/renderer/viewport.cpp
     src/frontend/setup.cpp
     src/frontend/time_attack.cpp
