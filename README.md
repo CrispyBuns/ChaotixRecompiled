@@ -277,6 +277,16 @@ copied into `Mods/Textures` replace every frame of that bank at once; a
 frame's own `32x_<bank>_<frame>.png` still wins over its cell
 (`chaotix_headless --export-sheets DIR` does the same from the command line).
 
+## Character mods
+
+`Mods/Characters/<name>.ini` (`mighty`, `knuckles`, `charmy`, `vector`,
+`bomb`, `heavy`, `espio`) gives a character new colours (`[Palette]`, its 18
+colours as `#RRGGBB`; Espio's shimmer in `[Cycle]`) and new handling
+(`[Stats]`: acceleration, top speed, gravity, jump and more, by name).
+Colours change only the picture; stats change the game, and take effect the
+next time it starts. With new sprites in `Mods/Textures`, Mighty can become
+someone else entirely. Details: [docs/CHARACTER_MODS.md](docs/CHARACTER_MODS.md).
+
 ## Music replacement
 
 Put WAV files in `Mods/Music` (see above for where `Mods` is),

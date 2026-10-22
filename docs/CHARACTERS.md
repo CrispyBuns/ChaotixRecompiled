@@ -172,10 +172,29 @@ the individual scenes were not mapped). A character swap (the combine at
   `$88E7BA` (ROM `0x0E7BA`, 160 bytes), written through the vblank palette
   queue (`FFD860`, flushed by `$8831AE`) to Espio's pixels 2-6, i.e. entries
   0x14-0x18 as player, 0x26-0x2A as partner. In the lobby the partner's
-  0x26-0x2A held another set (`0048 0090 10F8 359D 3E7E`). An Espio
-  replacement must override these sets too.
+  0x26-0x2A held another set (`0048 0090 10F8 359D 3E7E`): that is set 11
+  of the 16, and in the lobby with random input every set came round in
+  turn. Set 0 is Espio's own pixels 2-6 as `$8818E4` loads them. An Espio
+  replacement must override these sets too (character mods' `[Cycle]`).
 - The queue also cycles 0x37-0x3A (`$891784`), 0x42-0x47 (`$8B1648`) and
   0x58-0x5E: not character colours.
+
+Seen with the character mods' gate (which reports blocks it could not match,
+`chaotix_headless --characters`):
+
+- **Fades are uniform.** Through a whole fade-out (in the lobby, after the
+  finished-run recording's level, steps 1 to 31) every component of the 18 entries was
+  `max(original - n, 0)` with one `n` for the block, as `$882F78` implies.
+  No fade-in of character colours was seen: at a level start they are loaded
+  after the screen is already up.
+- **Stale offsets.** On the title screen and its menus bank 0's offset byte is
+  0x24 and entries 0x26-0x36 hold Mighty's colours, but 0x25 holds `1C00`
+  (the 32X layer there uses it for something else). The offset bytes keep the
+  last level's values through other scenes.
+- **The same character twice.** After a run the lobby can have the same
+  character as player and partner (Bomb and Bomb in the finished-run
+  recording): both blocks hold its colours, but its bank has one offset byte,
+  0x24, so the byte names only the partner's block.
 
 ### Where to substitute host-side
 
@@ -284,12 +303,15 @@ air dash, 30 Bomb, 32 Espio cling. 1C/1E are holes (`4E75` in the table).
 
 ## 4. Names
 
-- **Stage select** (`stage_select.h`): `$8F7254`, 8 self-relative word
-  offsets indexed by character id, to NUL-terminated strings padded to 10
-  characters at `$8F74E8`: `MIGHTY`, `**********`, `KNUCKLES`, `CHARMY BEE`,
+- **Stage select** (`stage_select.h`): `$8F7254` (ROM **`0x077254`**: the
+  window `$880000-$8FFFFF` is ROM `0x000000-0x07FFFF`), 8 signed word
+  offsets indexed by character id, each counted from the word itself, to
+  NUL-terminated strings padded to 10 characters with spaces at `$8F74E8`
+  (ROM `0x0774E8`): `MIGHTY`, `**********`, `KNUCKLES`, `CHARMY BEE`,
   `VECTOR`, `BOMB`, `HEAVY`, `ESPIO`, then `1 PLAYER`, `2 PLAYERS`. Printed by
-  `$8F7244` (via `$8F7562`). A frontend can read `kCharacters` from here
-  (ROM `0x0F7254`), which also follows a ROM patch.
+  `$8F7244` (via `$8F7562`). The front end's TIME ATTACK reads its names from
+  here (`stage_select::character_names`), so a ROM patch that renames a
+  character, or names slot 1, shows there.
 - **PLAYER SELECT / COMBI SELECT screen**: `$8B2678`, 32-byte entries
   (a signed word x adjustment, e.g. `FFB0`, then 30 characters) in **select
   order**, not id order: KNUCKLES THE ECHIDNA, MIGHTY THE ARMADILLO, ESPIO
@@ -300,6 +322,13 @@ air dash, 30 Bomb, 32 Espio cling. 1C/1E are holes (`4E75` in the table).
   character id was not traced.
 
 ## What this means for mods (proposal)
+
+The palette override and the stats file are now built: see
+[CHARACTER_MODS.md](CHARACTER_MODS.md). They differ from the proposal below
+in one point: a fade is followed by applying the same fade (the same `n`
+steps, out or in) to the mod's colours rather than by scaling them, which is
+what the game would show if the mod's colours were in the ROM, and needs no
+special case for a component that is 0.
 
 - **Palette override** (output only): `Mods/Characters/<name>.ini` or
   `Mods/Palettes/<char>.pal` with 18 BGR555 (or RGB) colours for pixels 1-18,

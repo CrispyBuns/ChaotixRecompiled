@@ -41,7 +41,8 @@ loaded), so a mod cannot change how the game plays.
 Full-colour PNGs are refused, with a message in the log: the colours must be
 indices into the game's palette, so that the palette's fades and cycling,
 and the colour offsets below, still apply. Changing which colours a palette
-holds is a ROM patch's job.
+holds is a ROM patch's job, or, for the characters' colours, a
+[character mod](CHARACTER_MODS.md)'s, which also sets how they move.
 
 ## Mega Drive tiles: `md_<hash>.png`
 
