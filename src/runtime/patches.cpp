@@ -2,6 +2,7 @@
 #include "runtime/patches.h"
 #include "runtime/system.h"
 #include <algorithm>
+#include <iterator>
 
 namespace chaotix::patches {
 
@@ -12,6 +13,43 @@ inline void set_low_byte(uint32_t& r, uint32_t v) { r = (r & 0xFFFFFF00u) | (v &
 
 inline uint16_t wram16(const Machine& m, uint32_t a) {
     return uint16_t(m.wram[a] << 8 | m.wram[a + 1]);
+}
+
+// Issue #36: more copies of a backdrop object's two pieces in the margins
+// (see kBackdropMaps). Runs at kPiecesDone, after the last piece is pushed.
+void extend_backdrop(Machine& m, m68k::State* c) {
+    if (!m.wide_active || m.wide_special) return;
+    const uint32_t map = m68k::rd32(c, c->a[0] + 0x10) & 0xFFFFFF;
+    if (std::find(std::begin(kBackdropMaps), std::end(kBackdropMaps), map) == std::end(kBackdropMaps)) return;
+    if ((c->a[3] & 0xFFFFFF) != map + 8) return;  // both pieces were just pushed
+    const uint16_t p0 = uint16_t(m68k::rd16(c, map)), w0 = uint16_t(m68k::rd16(c, map + 2));
+    const uint16_t p1 = uint16_t(m68k::rd16(c, map + 4)), w1 = uint16_t(m68k::rd16(c, map + 6));
+    const int h = int8_t(p1);
+    if ((p0 >> 8) != (p1 >> 8) || int8_t(p0) != -h || h <= 0 || (w0 >> 8) != (w1 >> 8) || (w0 & 0xFF) != 0 ||
+        (w1 & 0xFF) != 0x80)
+        return;
+    // The list holds the right piece at a5 and the left one 12 bytes above;
+    // X is the command's word at +4.
+    uint32_t a5 = c->a[5];
+    const int right = int16_t(m68k::rd16(c, a5 + 4));
+    const int left = int16_t(m68k::rd16(c, a5 + 12 + 4));
+    const int period = 2 * h;
+    if (right - left != period) return;
+    uint16_t cmd[6];
+    for (uint32_t i = 0; i < 6; ++i) cmd[i] = uint16_t(m68k::rd16(c, a5 + 2 * i));
+    const int ce = (std::clamp(m.wide_extra, 0, kMaxWideExtra) + 7) & ~7;  // the clip rectangle's margin
+    auto push = [&](int x) {
+        if (((a5 - 12) & 0xFFFF) < kCommandListLimit) return false;
+        a5 -= 12;
+        cmd[2] = uint16_t(x);
+        for (uint32_t i = 0; i < 6; ++i) m68k::wr16(c, a5 + 2 * i, cmd[i]);
+        return true;
+    };
+    for (int x = left - period; x + h > -ce; x -= period)
+        if (!push(x)) break;
+    for (int x = right + period; x - h < kNativeWidth + ce; x += period)
+        if (!push(x)) break;
+    c->a[5] = a5;
 }
 
 void m68k_hook(m68k::State* c, uint32_t pc) {
@@ -49,6 +87,9 @@ void m68k_hook(m68k::State* c, uint32_t pc) {
         }
         return;
     }
+    case kPiecesDone:
+        extend_backdrop(*m, c);
+        return;
     case kModeDispatch:
         // The game is between scenes: a stage the host asked for can start.
         if (m->stage_pending) {

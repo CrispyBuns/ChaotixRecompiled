@@ -33,6 +33,11 @@ enum : uint32_t {
     kRingCullHi = 0x881052,      // cmpi.w #$1D0,d2
     kRingCullDone = 0x881058,    // both passed
     kRingCullExit = 0x881074,    // rts (rejected paths land here)
+    // A 32X object's pieces (68K 0x881270-0x88128A): each piece of the
+    // object's mapping is pushed onto the 32X command list (a5, growing down)
+    // as op 0x01, `01 BANK FRAME FLAGS X.w Y.w SX.w SY.w`; this is the rts
+    // after the last one (issue #36, see kBackdropMaps).
+    kPiecesDone = 0x88126E,
     // The game mode dispatcher (ROM 0x3262): reads the mode from $FFDFDE and
     // jumps to its handler, which then runs its own loop. This is the only
     // point the game passes through between scenes, so it is where a stage the
@@ -80,6 +85,21 @@ constexpr uint8_t kSoundStopMusic = 0xF1;
 // Z80 RAM: non-zero while the game is paused and the driver holds the music.
 constexpr uint32_t kZ80Paused = 0x1C10;
 
+// MARINA MADNESS draws its clouds and sea (issue #36) as four screen-fixed
+// 32X objects at X 160, each a two-piece mapping (in the ROM's 68K bank at
+// 0x9D944C): the same frame of bank 34 at X - h and X + h, h = 96 for the
+// clouds and 80 for the three bands of sea below them. The two copies meet at
+// X, so the picture repeats every 2h; but they cover only X - 2h .. X + 2h,
+// -32..352 and 0..320, and the margins showed the sky behind them. In a
+// widened level the hook at kPiecesDone pushes more copies of the same
+// command, 2h apart, until the clip rectangle is covered. The mappings are
+// told by their address and checked by their bytes: two pieces, the same
+// line and frame, X - h and X + h, no flags.
+inline constexpr uint32_t kBackdropMaps[] = {0x9D944C, 0x9D9454, 0x9D945C, 0x9D9464};
+// The game stops adding objects to the command list once a5 is below this
+// (68K 0x8811CA); the extra copies keep above it.
+constexpr uint32_t kCommandListLimit = 0xD0A0;
+
 // Plane A struct in 68K work RAM: +0 camera X, +8 right bound, +A left bound,
 // +10 camera Y, +C bottom bound, +E top bound.
 constexpr uint32_t kPlaneAStruct = 0xC1DE;
@@ -97,7 +117,7 @@ constexpr uint32_t kSceneLevel = 0xDFF4;
 
 // Sorted: the interpreter binary-searches this list.
 inline constexpr uint32_t kM68kHooks[] = {
-    kRingCullLo, kRingCullHi, kRingCullDone, kRingCullExit, kModeDispatch,
+    kRingCullLo, kRingCullHi, kRingCullDone, kRingCullExit, kPiecesDone, kModeDispatch,
     kFullRedrawA, kRowsA_X, kFullRedrawB, kRowsB_X, kPlaneUpdateA, kRowUpA_X, kRowDownA_X,
     kColLeftA_X, kColRightA_X, kPlaneUpdateB, kColLeftB_X, kColRightB_X, kRowUpB_X, kRowDownB_X,
     kCamClampMax, kCamClampMin, kCamClampBottom, kFillSplitX, kSoundRequest,

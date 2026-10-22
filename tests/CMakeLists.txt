@@ -173,6 +173,26 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
     set_tests_properties(widescreen_lobby_when_asked PROPERTIES TIMEOUT 600
         PASS_REGULAR_EXPRESSION "margins live from frame 5[0-9][0-9]")
 
+    # MARINA MADNESS's clouds and sea are four screen-fixed 32X objects, each
+    # two copies of one picture that cover only the 4:3 screen (issue #36:
+    # the band stopped at the 4:3 edges). Widened, more copies at the game's
+    # own spacing must be on the command list for both margins: the clouds
+    # (2 x 96 px apart) and the sea below them (2 x 80 px) ...
+    add_test(NAME widescreen_marina_madness_backdrop_fills_the_margins
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 901 --wide 53
+                --stage 300:4:1:0:2:7:0 --sprites-log 900)
+    set_tests_properties(widescreen_marina_madness_backdrop_fills_the_margins PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "bank  34 frame   0 x  448 y   90[^
+]*
+ *[0-9]+ bank  34 frame   0 x -128 y   90.*bank  34 frame   3 x  400 y  159[^
+]*
+ *[0-9]+ bank  34 frame   3 x  -80 y  159")
+    # ... and the interpreter and the recompiled code must add them alike.
+    add_test(NAME lockstep_widescreen_marina_madness
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2000 --wide 53 --lockstep
+                --stage 300:4:2:2:2:7:0 --fuzz 36:700:2000)
+    set_tests_properties(lockstep_widescreen_marina_madness PROPERTIES TIMEOUT 900)
+
     # The HUD at the picture's edge (issue #28) patches the SH-2 boot code;
     # the interpreter and the recompiled code must still agree.
     add_test(NAME lockstep_widescreen_hud_at_the_edge
