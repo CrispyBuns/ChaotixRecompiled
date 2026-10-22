@@ -346,6 +346,10 @@ void SpriteRecorder::rebuild_index(const Machine& m) {
             const uint32_t a = t + 4 * f;
             uint32_t v = 0;
             if (a >= end || !read32(m, a, &v)) break;
+            // An empty slot (several character banks have them, e.g. Mighty
+            // from frame 09, Heavy from 02; docs/CHARACTERS.md): the frames
+            // after it still belong to the bank.
+            if (v == 0xFFFFFFFFu) continue;
             v = canonical(v);
             if (!plausible_graphic(m, v)) break;
             if (v > t && in_rom(v) == in_rom(t)) end = std::min(end, v);
