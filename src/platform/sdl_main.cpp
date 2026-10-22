@@ -938,8 +938,43 @@ void draw_touch_stick(App& app, const TouchButton& b) {
     }
 }
 
+// The band between radii r0 and r1, for the buttons' rims.
+void fill_ring(SDL_Renderer* r, float cx, float cy, float r0, float r1, SDL_FColor c) {
+    constexpr int kSteps = 40;
+    SDL_Vertex v[kSteps * 2];
+    int idx[kSteps * 6];
+    for (int i = 0; i < kSteps; ++i) {
+        const float a = float(i) * 2.0f * SDL_PI_F / float(kSteps);
+        const float ca = std::cos(a), sa = std::sin(a);
+        v[i * 2] = {{cx + ca * r1, cy + sa * r1}, c, {0, 0}};
+        v[i * 2 + 1] = {{cx + ca * r0, cy + sa * r0}, c, {0, 0}};
+        const int j = (i + 1) % kSteps;
+        const int quad[6] = {i * 2, i * 2 + 1, j * 2, j * 2, i * 2 + 1, j * 2 + 1};
+        for (int k = 0; k < 6; ++k) idx[i * 6 + k] = quad[k];
+    }
+    SDL_RenderGeometry(r, nullptr, v, kSteps * 2, idx, kSteps * 6);
+}
+
+// An arrow head pointing along (dx, dy), centred on (cx, cy).
+void fill_arrow(SDL_Renderer* r, float cx, float cy, float dx, float dy, float size, SDL_FColor c) {
+    const float px = -dy, py = dx;  // across the arrow
+    SDL_Vertex v[3] = {
+        {{cx + dx * size, cy + dy * size}, c, {0, 0}},
+        {{cx - dx * size * 0.6f + px * size, cy - dy * size * 0.6f + py * size}, c, {0, 0}},
+        {{cx - dx * size * 0.6f - px * size, cy - dy * size * 0.6f - py * size}, c, {0, 0}},
+    };
+    SDL_RenderGeometry(r, nullptr, v, 3, nullptr, 0);
+}
+
+// The drawn controls, when no image replaces them (issue #8): round buttons
+// with a rim and the letter in the menu's pixel face, and a d-pad on a round
+// base with an arrow per direction, each lit while held. Everything follows
+// TOUCH OPACITY and PRESSED OPACITY.
 void draw_touch_controls(App& app, uint16_t held) {
     SDL_SetRenderDrawBlendMode(app.renderer, SDL_BLENDMODE_BLEND);
+    auto colour = [&app](float r, float g, float b, bool on, int full) {
+        return SDL_FColor{r, g, b, float(touch_alpha(app, on, full)) / 255.0f};
+    };
     for (const auto& b : app.touch.buttons()) {
         if (b.is_dpad && app.touch.stick()) {
             draw_touch_stick(app, b);
@@ -953,17 +988,34 @@ void draw_touch_controls(App& app, uint16_t held) {
             SDL_RenderTexture(app.renderer, img, nullptr, &dst);
             continue;
         }
-        SDL_SetRenderDrawColor(app.renderer, 255, 255, 255, touch_alpha(app, on, 110));
-        // Approximate circles with a filled square plus cross for the d-pad.
-        SDL_FRect r{b.cx - b.r * 0.7f, b.cy - b.r * 0.7f, b.r * 1.4f, b.r * 1.4f};
         if (b.is_dpad) {
-            SDL_FRect h{b.cx - b.r, b.cy - b.r * 0.33f, b.r * 2, b.r * 0.66f};
-            SDL_FRect v{b.cx - b.r * 0.33f, b.cy - b.r, b.r * 0.66f, b.r * 2};
+            fill_circle(app.renderer, b.cx, b.cy, b.r, colour(0.05f, 0.06f, 0.10f, false, 120));
+            fill_ring(app.renderer, b.cx, b.cy, b.r * 0.93f, b.r, colour(1, 1, 1, false, 150));
+            const float arm = b.r * 0.30f, len = b.r * 0.82f;
+            const SDL_FRect h{b.cx - len, b.cy - arm, len * 2, arm * 2};
+            const SDL_FRect v{b.cx - arm, b.cy - len, arm * 2, len * 2};
+            SDL_SetRenderDrawColor(app.renderer, 210, 218, 235, touch_alpha(app, false, 70));
             SDL_RenderFillRect(app.renderer, &h);
             SDL_RenderFillRect(app.renderer, &v);
+            const struct { uint16_t mask; float dx, dy; } dirs[4] = {
+                {PAD_UP, 0, -1}, {PAD_DOWN, 0, 1}, {PAD_LEFT, -1, 0}, {PAD_RIGHT, 1, 0}};
+            for (const auto& d : dirs) {
+                const bool lit = (held & d.mask) != 0;
+                fill_arrow(app.renderer, b.cx + d.dx * len * 0.62f, b.cy + d.dy * len * 0.62f, d.dx, d.dy, arm * 0.75f,
+                           lit ? colour(0.38f, 0.60f, 1.0f, true, 255) : colour(1, 1, 1, false, 220));
+            }
+            continue;
+        }
+        fill_circle(app.renderer, b.cx, b.cy, b.r,
+                    on ? colour(0.38f, 0.60f, 1.0f, true, 150) : colour(0.05f, 0.06f, 0.10f, false, 120));
+        fill_ring(app.renderer, b.cx, b.cy, b.r * 0.88f, b.r, colour(1, 1, 1, on, 220));
+        if (app.ui.ready()) {
+            const ui::Font f = ui::Font::Pixel;
+            const std::string label = b.label;
+            const float w = app.ui.text_width(f, label), lh = app.ui.line_height(f);
+            app.ui.text(f, b.cx - w * 0.5f, b.cy - lh * 0.5f, label, ui::Color{255, 255, 255, touch_alpha(app, on, 255)});
         } else {
-            SDL_RenderFillRect(app.renderer, &r);
-            SDL_SetRenderDrawColor(app.renderer, 0, 0, 0, touch_alpha(app, on, 200));
+            SDL_SetRenderDrawColor(app.renderer, 255, 255, 255, touch_alpha(app, on, 255));
             SDL_RenderDebugText(app.renderer, b.cx - 4.0f * float(SDL_strlen(b.label)), b.cy - 4, b.label);
         }
     }
