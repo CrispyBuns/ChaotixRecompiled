@@ -348,7 +348,9 @@ TEST(sprite_record, a_blit_is_recorded_for_the_back_buffer_with_its_bank_and_fra
     r.hook(*m, c, patches::kSh2Blit);
     CHECK_EQ(r.list(1).draws.size(), size_t(1));  // the back buffer
     CHECK_EQ(r.list(0).draws.size(), size_t(0));
-    const SpriteDraw& d = r.list(1).draws[0];
+    // A copy: the second blit below grows the list, which may move the first
+    // draw (libc++ then overwrites the freed one, so a reference read zero).
+    const SpriteDraw d = r.list(1).draws[0];
     CHECK_EQ(d.bank, 0x21);
     CHECK_EQ(d.frame, 1);
     CHECK_EQ(d.x, 100);
