@@ -437,7 +437,16 @@ void save_screenshot(App& app) {
 // machine it came from, so the buses are re-pointed afterwards.
 bool return_to_title(App& app) {
     if (!app.title_snapshot) return false;
+    // The save survives the trip back, as the cartridge's battery-backed SRAM
+    // survives turning the console off: the snapshot holds the save as it was
+    // when the game was handed control, and restoring that would undo every
+    // level cleared since -- on screen at once, and on disk as soon as the
+    // game saved again on top of it.
+    std::vector<uint8_t> save(app.m->sram, app.m->sram + sizeof app.m->sram);
+    const bool save_dirty = app.m->sram_dirty;
     *app.m = *app.title_snapshot;
+    std::copy(save.begin(), save.end(), app.m->sram);
+    app.m->sram_dirty = save_dirty;
     // The Start handed over at START GAME may still be in flight; leaving it
     // running would walk the game straight back out of the title.
     app.inject_start = 0;

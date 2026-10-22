@@ -126,7 +126,11 @@ reach. Escape (or the pad's menu button) then brings up a pause menu, which
 adds BACK TO TITLE. The game has no way back to its title screen, so the
 title is copied when control is handed over and put back on the way out;
 anything chosen inside the game's menus is discarded, as it would be by
-turning the console off.
+turning the console off. The save is kept, as the cartridge's battery keeps
+it: progress the game has saved to a DATA slot is there when you come back.
+Progress made with NO SAVE (DATA LOAD's first choice, and the one selected at
+first) only ever lives in memory, so going back to the title loses it, as
+resetting the console would.
 
 TIME ATTACK drops you straight into any level. Knuckles' Chaotix carries a
 complete stage-select screen that the shipped game never reaches (game mode
