@@ -33,7 +33,9 @@ people below. Thank you all: every report here led to a fix or a feature.
   ([#6](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/6),
   [#18](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/18)).
 - **[SegaSaturnFan](https://github.com/SegaSaturnFan)**: widescreen dropping to
-  4:3 ([#7](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/7)).
+  4:3 ([#7](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/7)) and
+  Marina Madness's clouds and sea in widescreen
+  ([#36](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/36)).
 - **[datadrivezz](https://github.com/datadrivezz)**: the touch menus,
   touch control opacity, ROM patches and suggestions for the mobile build
   ([#8](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/8),
