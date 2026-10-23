@@ -29,6 +29,15 @@ function(chaotix_set_warnings target)
                 -mtune=cortex-a35
                 "$<$<CONFIG:Release>:-ffast-math>"
             )
+
+            # The generated SH-2/M68K game code lives in chaotix_game. Give
+            # that hot path an explicit Release optimization level and omit
+            # frame pointers to reduce register pressure on the Cortex-A35.
+            if(target STREQUAL "chaotix_game")
+                target_compile_options(${target} PRIVATE
+                    "$<$<CONFIG:Release>:-O3;-fomit-frame-pointer;-fno-semantic-interposition>"
+                )
+            endif()
         endif()
     endif()
 endfunction()
