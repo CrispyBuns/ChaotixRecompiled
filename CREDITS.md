@@ -15,10 +15,12 @@ people below. Thank you all: every report here led to a fix or a feature.
 
 ## Art
 
-- **Cotton_Candy_2C**: the pixel art of Knuckles used as the app icon, from
-  [SteamGridDB](https://www.steamgriddb.com/icon/22213).
-- **[Abdouxgo](https://github.com/Abdouxgo)**: suggesting that art as the app
-  icon ([#22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22)).
+- The app icon is the game's logo (Sega / Sonic Team), from
+  [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Knuckles%27_Chaotix_logo.webp).
+- Up to 0.6.1 the icon was pixel art of Knuckles by **Cotton_Candy_2C**, from
+  [SteamGridDB](https://www.steamgriddb.com/icon/22213), suggested by
+  **[Abdouxgo](https://github.com/Abdouxgo)**
+  ([#22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22)).
 
 ## Reports and ideas
 

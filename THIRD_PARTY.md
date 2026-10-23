@@ -33,12 +33,16 @@ screen is what runs when nothing is installed yet.
 - Files: `assets/icon/icon.png`, `assets/icon/icon_64.rgba`,
   `platforms/windows/app.ico`, `platforms/android/app/src/main/res/mipmap-*/ic_launcher.png`
   (the macOS and iOS icons are scaled from `icon.png` when they are packaged)
-- Pixel art of Knuckles by Cotton_Candy_2C, from
-  [SteamGridDB](https://www.steamgriddb.com/icon/22213). It was suggested by
+- The Knuckles' Chaotix logo by Sega / Sonic Team, from
+  [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Knuckles%27_Chaotix_logo.webp),
+  where it is marked public domain as a text-only logo (PD-textlogo). It may
+  still be a trademark of Sega; see [LEGAL.md](LEGAL.md). The logo is
+  unchanged; the red rounded square behind it was drawn for the icon, and
+  the sizes are scaled from a 1024 px master.
+- Up to 0.6.1 the icon was pixel art of Knuckles by Cotton_Candy_2C, from
+  [SteamGridDB](https://www.steamgriddb.com/icon/22213), suggested by
   [Abdouxgo](https://github.com/Abdouxgo) in
-  [issue #22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22);
-  the background was made transparent and the sizes scaled from it. Knuckles
-  is a Sega character; see [LEGAL.md](LEGAL.md).
+  [issue #22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22).
 
 The OFL permits redistribution, bundled or embedded, as long as the licence
 travels with it and the font is not sold on its own. All three files are the
