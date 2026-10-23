@@ -30,9 +30,10 @@ unmodified game, which is checked by a test. Scenes outside levels stay 4:3.
 | Platform | State |
 |---|---|
 | Windows | built and played (MSYS2 GCC, and MSVC) |
-| Linux / macOS | build configuration present, not yet run by the author |
+| Linux | build configuration present, not yet run by the author |
+| macOS | [builds and runs](docs/BUILDING_APPLE.md) on Apple Silicon (an M1; every test passes, lockstep bit-identical) |
 | Android | [builds and runs](platforms/android/README.md) (verified on an API 36 emulator) |
-| iOS | build configuration present, not yet built |
+| iOS / iPadOS | [builds and runs in the iOS Simulator](docs/BUILDING_APPLE.md); an `.ipa` for sideloading, not yet tried on a device |
 
 [docs/MILESTONES.md](docs/MILESTONES.md) tracks the detail;
 [ARCHITECTURE.md](ARCHITECTURE.md) explains how it is put together. (Those two documents are written in
@@ -67,7 +68,9 @@ environment variable set.
 
 Cross builds (Android, iOS) do not run the recompiler: build once on a host
 with `CHAOTIX_ROM` so `generated/` exists, then configure the target build,
-which picks it up. See [platforms/android/README.md](platforms/android/README.md).
+which picks it up. See [platforms/android/README.md](platforms/android/README.md),
+and [docs/BUILDING_APPLE.md](docs/BUILDING_APPLE.md) for the macOS app and the
+iOS `.ipa` (`scripts/package_apple.sh macos|ios VERSION` on a Mac).
 
 ## Run
 
@@ -77,7 +80,8 @@ build/ChaotixRecompiled
 
 On the first launch a setup page asks for your ROM. It lists the ROMs it can
 find (Downloads, Documents, an `__ROM__` folder next to the executable, the
-app's own folder on Android); you can also drag a file onto the window, press
+app's own folder on Android, the app's Documents on iOS, where the Files app
+can put it); you can also drag a file onto the window, press
 `O` to browse, or tap the on-screen buttons. The file is verified by SHA-1 and
 copied into the app's own folder, so later launches go straight into the game.
 A verified ROM given on the command line (including dragging it onto the
@@ -94,7 +98,11 @@ opens a menu page at startup (so it can be captured without a keyboard;
 `timeattack` is one of them).
 
 Settings live in the user data directory (`Config/chaotix.ini`), saves in
-`SaveData/`, the installed ROM in `Game/`.
+`SaveData/`, the installed ROM in `Game/`. That directory is
+`%APPDATA%\ChaotixRecompiled\ChaotixRecompiled` on Windows,
+`~/.local/share/ChaotixRecompiled/ChaotixRecompiled` on Linux,
+`~/Library/Application Support/ChaotixRecompiled/ChaotixRecompiled` on macOS
+and the app's Documents on iOS (the Files app's On My iPhone > Chaotix).
 
 | Key | Action |
 |---|---|
@@ -109,7 +117,10 @@ Settings live in the user data directory (`Config/chaotix.ini`), saves in
 | F6 | True widescreen on/off (applies from the next level load; resizing the window applies at once) |
 | F7 | Achievements (the menu's Awards page) |
 | F11, Alt+Enter | Borderless fullscreen |
-| Tab (hold) | Fast-forward |
+| Tab (hold) | Fast-forward (on a pad, the right trigger; see Fast-forward below) |
+| F8 / F9 | Save state / load state, in the current slot (see Save states and rewind below) |
+| F10 | Next save state slot (1-4) |
+| Backspace (hold) | Rewind (on a pad, the left trigger) |
 | F12 | Screenshot |
 
 The menu is the front end: it is up as soon as the program starts, a screen of
@@ -119,8 +130,24 @@ and dimmed. The art is the game drawing its own title screen, from your ROM,
 so nothing is extracted or shipped.
 
 OPTIONS is split into VIDEO (widescreen, aspect ratio, scaling, screen),
-SOUND (the volumes), INPUT (touch pad, 6-button pad) and EXTRAS (cheats,
-awards, and on Android the Mods folder).
+SOUND (the volumes), INPUT (touch controls, fast-forward, 6-button pad) and EXTRAS (cheats,
+the menu's look, awards, and on Android the Mods folder).
+
+The menu is written in the game's own font -- the white digits and shaded
+yellow capitals of its TRAINING and DATA LOAD screens -- and shows the game's
+zones behind itself, a different one each time it opens, under a translucent
+coat of that zone's colour. Both are made from your ROM: the font is read
+from it at start-up, and each zone's picture is rendered once by the game
+itself, on a second machine in the background while a menu is open -- it is
+paused whenever you are playing -- (a couple of seconds each on a PC, longer
+on a phone), then kept in the user data folder under
+`Cache/Backdrops`. Until a picture exists the menu is plain. OPTIONS > EXTRAS
+> MENU BACKGROUND picks CYCLE (every zone in turn, the default), one zone
+for good (WORLD ENTRANCE, ISOLATED ISLAND, BOTANIC BASE, MARINA MADNESS,
+SPEED SLIDER, AMAZING ARENA or TECHNO TOWER; only that picture is made), or
+PLAIN. MENU FONT (GAME / PIXEL) and MENU BACKGROUND on PLAIN, `MenuFont` and
+`MenuBackground` in `[Video]`, bring back the earlier look. How it works:
+[docs/MENU_ART.md](docs/MENU_ART.md).
 
 START GAME hands the game control, and it proceeds into its own menus exactly
 as it would have on the console, so nothing the original offers is out of
@@ -128,7 +155,11 @@ reach. Escape (or the pad's menu button) then brings up a pause menu, which
 adds BACK TO TITLE. The game has no way back to its title screen, so the
 title is copied when control is handed over and put back on the way out;
 anything chosen inside the game's menus is discarded, as it would be by
-turning the console off.
+turning the console off. The save is kept, as the cartridge's battery keeps
+it: progress the game has saved to a DATA slot is there when you come back.
+Progress made with NO SAVE (DATA LOAD's first choice, and the one selected at
+first) only ever lives in memory, so going back to the title loses it, as
+resetting the console would.
 
 TIME ATTACK drops you straight into any level. Knuckles' Chaotix carries a
 complete stage-select screen that the shipped game never reaches (game mode
@@ -148,7 +179,8 @@ out of the game's own tables rather than invented here, and START uses the
 game's own route into a level, so a run behaves exactly as the console would.
 START goes straight there, in about a second: none of the game's own screens
 are passed through, only its level entry (the ball wipe and the BOTANIC BASE
-ticket).
+ticket). A run is played with NO SAVE, as the stage-select screen sets it, so
+it never touches your DATA slots.
 
 Every run is recorded, frame by frame, to `SaveData/last_run.txt`, and
 `chaotix_headless --replay-input` plays one back exactly. It is there because
@@ -182,6 +214,53 @@ pad takes every face and shoulder button, so the choice is among the ones it
 leaves alone - left stick click (the default), right stick click,
 Guide/Home/PS, the touchpad click, or Share/Capture. The same button backs
 out of the menu again.
+
+### Fast-forward
+
+FAST FORWARD KEY (Tab to begin with; press Enter, then the key) and FAST
+FORWARD PAD (the right trigger to begin with; also the left trigger, either
+stick click, Guide/Home/PS, the touchpad click, Share/Capture or NONE -- never
+one the emulated pad uses, nor the MENU BUTTON) are on the CONTROLS page.
+OPTIONS > INPUT has the rest:
+
+- TOUCH FAST FORWARD (OFF by default) adds a small fast-forward button to the
+  touch controls, in the top-left corner, which both touch layouts leave
+  empty. Its image is `ff.bmp` in `Mods/Touch`.
+- FAST FORWARD: HOLD (on while held, the default) or TOGGLE (each press turns
+  it on or off; the touch button stays lit while it is on).
+- FAST FORWARD SPEED: 2X and 4X run exactly two or four frames of the game
+  for every frame at the normal pace, and keep the sound -- all of it, played
+  that many times faster, so it is higher but unbroken. MAX (the default, and
+  what Tab always did) runs as fast as the machine allows, up to eight frames
+  for every picture shown, and is silent because it has no steady speed to
+  play the sound at.
+
+Fast-forward only runs more frames of the same game, so the game behaves
+exactly as it would have. It does nothing during a TIME ATTACK run (the touch
+button is not shown either), so every record is set at the game's own speed,
+nor while the menu is open. In the settings file: `FastForwardKey`,
+`FastForwardButton`, `TouchFastForward`, `FastForwardMode` (Hold | Toggle)
+and `FastForwardSpeed` (2x | 4x | Max) in `[Input]`.
+
+### Save states and rewind
+
+The pause menu's STATES page saves and loads the game in one of four slots
+(SLOT), and turns rewind on or off. F8 saves, F9 loads and F10 picks the next
+slot; holding Backspace (or the left trigger) steps back through the last
+minute of play, at twice the game's speed and without sound, and letting go
+plays on from there. CONTROLS > STATES AND REWIND rebinds the keys, gives
+saving and loading a pad button if wanted (none to begin with) and turns on
+an on-screen rewind button (TOUCH REWIND, off to begin with; `rew.bmp` in
+`Mods/Touch`). Rewind is on to begin with on computers and off on phones and
+tablets.
+
+A state is the whole machine, so loading one carries on exactly as the game
+would have from that moment; the cartridge save (the DATA slots) is never put
+back by a load or by rewinding. States are files in `States/` in the user data
+folder and survive restarting the program, but only load with the same ROM,
+ROM patches and version of this program. None of it works during a TIME
+ATTACK run, so a record is always one unbroken run. See
+[docs/SAVE_STATES.md](docs/SAVE_STATES.md).
 
 OPTIONS > EXTRAS has RESET AWARDS, which asks twice before locking everything again.
 
@@ -224,7 +303,7 @@ effects take over some of the music's channels while they play, and those
 channels follow EFFECTS for that time; see `src/audio/volumes.h`.
 
 Touch controls can be reskinned: BMP images named after the buttons
-(`dpad.bmp`, `a.bmp` ... `start.bmp`, `button.bmp` for all face buttons,
+(`dpad.bmp`, `a.bmp` ... `start.bmp`, `ff.bmp`, `button.bmp` for all face buttons,
 `<name>_pressed.bmp` while held) in `Mods/Touch`. The folder holds a
 README.txt that lists them.
 
@@ -234,13 +313,75 @@ lifted, and steers even after sliding off the base. Its images are
 `stick.bmp` (the base) and `knob.bmp`, each with an optional `_pressed`
 version.
 
+TOUCH LAYOUT (OPTIONS > INPUT, `TouchLayout` in `[Input]`) has CLASSIC,
+every button of the pad, and SONIC CD, the layout of Sonic CD's 2013 mobile
+version: the directions on the left and one large jump button on the right,
+with HOLD (B) and CALL (A) small above it -- the only buttons this game
+uses -- and anywhere else on the lower right of the screen jumping too.
+
+TOUCH OPACITY and PRESSED OPACITY (OPTIONS > INPUT; `TouchOpacity` and
+`TouchPressedOpacity` in `[Input]`) set how opaque the touch controls are at
+rest and while held, custom images included: 65% and 100% by default.
+
 The `Mods` folder is in the user data folder. On Android it is
 `ChaotixRecompiled/Mods` in the phone's storage once you allow it (OPTIONS >
 EXTRAS > MODS FOLDER opens Android's "All files access" page), and
-`Android/data/org.chaotixrecompiled/files/Mods` until then.
+`Android/data/org.chaotixrecompiled/files/Mods` until then. On iOS it is
+`Mods` in the app's Documents, which the Files app shows.
 
 In widescreen levels the HUD keeps to the left edge of the picture; OPTIONS >
 VIDEO > WIDE HUD puts it back at its 4:3 place.
+
+## ROM patches
+
+`.ips` and `.bps` files in `Mods/Patches` are applied, in name order, to the
+ROM in memory as the game starts: graphics, palettes and other ROM hacks
+without rebuilding, and without changing your ROM file. A patch that changes
+the game's code works too; that code then runs in the interpreter. Details:
+[docs/ROM_PATCHES.md](docs/ROM_PATCHES.md).
+
+## Graphics replacement
+
+Both layers' graphics can be replaced with PNG files: the Mega Drive layer's
+tiles (backgrounds and level art) and the 32X layer's sprites (the
+characters, the HUD, objects, the title). OPTIONS > EXTRAS > DUMP GRAPHICS
+saves each graphic the game draws to `Mods/Textures/Dump`, as `md_<hash>.png`
+or `32x_<bank>_<frame>.png`; an edited copy in `Mods/Textures` is drawn
+instead, in the game's palette, wherever the game uses it. Only the picture
+changes: the game runs exactly as without the mod. Details:
+[docs/TEXTURE_MODS.md](docs/TEXTURE_MODS.md).
+
+To redraw a whole character, OPTIONS > EXTRAS > EXPORT SPRITES writes every
+frame of each character's sprite banks, without playing, as one sheet per
+bank to `Mods/Textures/Sheets`: `32x_<bank>.png`, the frames side by side in
+a grid, and `32x_<bank>.txt`, where each frame is. A sheet and its `.txt`
+copied into `Mods/Textures` replace every frame of that bank at once; a
+frame's own `32x_<bank>_<frame>.png` still wins over its cell
+(`chaotix_headless --export-sheets DIR` does the same from the command line).
+
+Mega Drive text built from letter tiles (the title menu, OPTIONS, PLAYER
+SELECT, the DATA LOAD banners) can be replaced by *sequence* rather than tile
+by tile, for translations: `mdtext_<name>.txt` names a run of tiles, such as
+the seven of "OPTIONS", and `mdtext_<name>.png` is drawn over that run
+wherever a plane shows it, and nowhere else. With DUMP GRAPHICS on, the runs
+of tiles on each screen are listed in `Mods/Textures/Dump/Text`, with a
+numbered screenshot, ready to copy. Details in
+[docs/TEXTURE_MODS.md](docs/TEXTURE_MODS.md#mega-drive-text-by-tile-sequence-mdtext_nametxt-and-mdtext_namepng).
+Text drawn with Mega Drive sprites (the menu banners' letters, PLAY STYLE,
+SOUND TEST, the 8x16 font's names) is replaced the same way by
+`mdsprite_<name>.txt` + `.png`, naming the group of sprites that shows it;
+the dump lists the sprites on screen in groups as `Dump/Text/sprites_<n>.txt`
+([details](docs/TEXTURE_MODS.md#mega-drive-text-by-sprite-mdsprite_nametxt-and-mdsprite_namepng)).
+
+## Character mods
+
+`Mods/Characters/<name>.ini` (`mighty`, `knuckles`, `charmy`, `vector`,
+`bomb`, `heavy`, `espio`) gives a character new colours (`[Palette]`, its 18
+colours as `#RRGGBB`; Espio's shimmer in `[Cycle]`) and new handling
+(`[Stats]`: acceleration, top speed, gravity, jump and more, by name).
+Colours change only the picture; stats change the game, and take effect the
+next time it starts. With new sprites in `Mods/Textures`, Mighty can become
+someone else entirely. Details: [docs/CHARACTER_MODS.md](docs/CHARACTER_MODS.md).
 
 ## Music replacement
 
@@ -270,6 +411,11 @@ you have the right to use, please.
   `--replay-input` plays back a session the program recorded with
   `--record-input`, so that something only a person can do — finishing a level,
   say — can be studied here as often as needed.
+- `chaotix_headless --save-state FRAME:FILE` writes a save state after that
+  frame and `--load-state FILE` starts from one (the run then goes on to
+  `--frames`); `--state-hash-every N` prints a fingerprint of the whole
+  machine and `--rewind INTERVAL[:MB]` times the rewind buffer and checks
+  every snapshot it holds (docs/SAVE_STATES.md).
 
 ## Tests
 

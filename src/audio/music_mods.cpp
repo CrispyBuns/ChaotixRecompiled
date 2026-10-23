@@ -221,6 +221,39 @@ void MusicMods::on_request(uint8_t id) {
     if (!track(id)) current_ = 0;
 }
 
+namespace {
+constexpr uint8_t kPositionVersion = 1;
+constexpr size_t kPositionSize = 1 + 1 + 1 + 8 + 8 + 4 + 4;
+} // namespace
+
+std::vector<uint8_t> MusicMods::save_position() const {
+    std::vector<uint8_t> b;
+    auto put = [&b](uint64_t v, int n) { for (int i = 0; i < n; ++i) b.push_back(uint8_t(v >> (8 * i))); };
+    put(kPositionVersion, 1);
+    put(current_, 1);
+    put(held_, 1);
+    put(position_, 8);
+    put(held_position_, 8);
+    put(uint32_t(fade_frames_), 4);
+    put(uint32_t(fade_left_), 4);
+    return b;
+}
+
+void MusicMods::load_position(const std::vector<uint8_t>& b) {
+    if (b.size() != kPositionSize || b[0] != kPositionVersion) return;
+    size_t at = 1;
+    auto get = [&](int n) { uint64_t v = 0; for (int i = 0; i < n; ++i) v |= uint64_t(b[at++]) << (8 * i); return v; };
+    current_ = uint8_t(get(1));
+    held_ = uint8_t(get(1));
+    position_ = size_t(get(8));
+    held_position_ = size_t(get(8));
+    fade_frames_ = int(int32_t(get(4)));
+    fade_left_ = int(int32_t(get(4)));
+    // A piece that has no file now (the folder changed) plays nothing; one
+    // past its end starts again from its loop or stops, as after_frame does.
+    if (current_ && !track(current_)) current_ = 0;
+}
+
 void MusicMods::after_frame(Machine& m, size_t first_sample) {
     for (uint8_t id : m.music_events) on_request(id);
     m.music_events.clear();

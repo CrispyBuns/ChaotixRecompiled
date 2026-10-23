@@ -117,3 +117,32 @@ Now only the picture lines (line table entry y at `0x200 + 0x200 * y`) are
 widened; bytes before and after them are written exactly as the hardware does.
 Test: `widescreen_render.the_special_stage_result_reaches_the_68k` (fails
 with the old routing). 4:3 was never affected.
+
+## Speed (issue #31)
+
+The special stage lagged on a slow PC (a Celeron J1800: 20-37 ms of emulation
+per frame) while levels did not. It ran almost entirely in the interpreter:
+68K 7% native, master SH-2 3%, slave 49%, against 100% in a level. Four causes:
+
+- No coverage session reached it, so its code was never recompiled.
+  `tools/coverage/record_sessions.py` now records all seven special stages,
+  one entered from a level, the bonus stage, the hub and every level.
+- The widescreen patches rewrite immediates in its busiest routines (the
+  ADD #80 pairs, and the HUD's MOV #32 in levels), which failed validation.
+  The recompiler now reads those immediates as they run and leaves only their
+  byte out of the validated code (`patches::is_patched_sh2_immediate`).
+- It keeps variables in words after its code, written through MOVA or a
+  pointer and read back PC-relative. Folded as constants, native code read
+  the ROM's value after the game had changed it (lockstep diverged). Literal
+  loads from SDRAM code are now read as they run, and are not validated.
+- It rewrites its own code (the ADD at $06005A64). Direct native calls skipped
+  the callee's validation, and a function kept running what it was entered
+  with. Calls into RAM code now check the callee, and RAM code checks the code
+  epoch after a store or a call and hands over to the interpreter, at the
+  boundary the interpreter would reach.
+
+Now 100% / 99% / 100% native: 1.24 ms per frame on the development PC instead
+of 2.10, the slowest frame 1.9 ms instead of 4.7. `special_stage_runs_recompiled`
+and `lockstep_special_stage_variables` keep it that way; a sweep of 33 lockstep
+runs (all special stages, levels, bonus stage, hub, random input) is
+bit-identical.

@@ -2,6 +2,7 @@
 #include "system.h"
 #include "patches.h"
 #include "log.h"
+#include "sprite_record.h"
 #include <cstring>
 
 namespace chaotix {
@@ -65,6 +66,7 @@ uint32_t Machine::fb_read(uint32_t off, int size) {
 void Machine::fb_write(uint32_t off, uint32_t v, int size, bool overwrite) {
     off &= 0x1FFFF;
     if (on_fb_write) on_fb_write(on_fb_write_user, off, v, size, overwrite);
+    if (sprites && sprites->tracks_writes()) sprites->fb_write(*this, off, v, size, overwrite);
     uint8_t* fb = mars.fb[mars.fb_display ^ 1];
     if (wide_special) { fb_write_special(fb, off, v, size, overwrite); return; }
     if (!overwrite) { be_write(fb + off, v, size); return; }
@@ -214,11 +216,11 @@ void Machine::vdp32x_write(uint32_t off, uint32_t v, int size) {
         uint8_t* fb = mars.fb[mars.fb_display ^ 1];
         uint32_t addr = mars.fill_addr;
         if (on_fb_fill) on_fb_fill(on_fb_write_user, addr, mars.fill_len + 1u, mars.fill_data);
+        if (sprites && sprites->tracks_writes()) sprites->fb_fill(*this, addr, mars.fill_len + 1u, mars.fill_data);
         if (wide_special) {
             uint8_t* shadow = fb_margin[mars.fb_display ^ 1];
-            if ((addr & 0xFF) == patches::kSpecialClearStart && mars.fill_len == patches::kSpecialClearLen &&
-                mars.fill_data == 0) {
-                // The stage's clear (see patches.h): the whole widened line.
+            if (patches::is_widened_clear(*this, addr, mars.fill_len + 1u, mars.fill_data)) {
+                // The scene's clear (see patches.h): the whole widened line.
                 const uint32_t line = (addr & 0xFF00) * 2u;
                 for (int x = -patches::kMaxWideExtra; x < kNativeWidth + patches::kMaxWideExtra; ++x) {
                     const uint32_t o = (line + uint32_t(x)) & 0x1FFFF;
@@ -258,7 +260,10 @@ void Machine::vdp32x_write(uint32_t off, uint32_t v, int size) {
         mars.fb_select_req = reg & 1;
         if (line >= kActiveLines || (mars.bitmap_mode & 3) == 0) {
             // In V-blank (or display blanked) the swap happens immediately.
-            if (mars.fb_display != mars.fb_select_req) mars.fb_display = mars.fb_select_req;
+            if (mars.fb_display != mars.fb_select_req) {
+                mars.fb_display = mars.fb_select_req;
+                if (sprites) sprites->flipped(*this);
+            }
         }
         break;
     }

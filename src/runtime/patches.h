@@ -12,6 +12,9 @@
 namespace chaotix {
 class Machine;
 }
+namespace sh2 {
+struct State;
+}
 
 namespace chaotix::patches {
 
@@ -33,6 +36,11 @@ enum : uint32_t {
     kRingCullHi = 0x881052,      // cmpi.w #$1D0,d2
     kRingCullDone = 0x881058,    // both passed
     kRingCullExit = 0x881074,    // rts (rejected paths land here)
+    // A 32X object's pieces (68K 0x881270-0x88128A): each piece of the
+    // object's mapping is pushed onto the 32X command list (a5, growing down)
+    // as op 0x01, `01 BANK FRAME FLAGS X.w Y.w SX.w SY.w`; this is the rts
+    // after the last one (issue #36, see kBackdropMaps).
+    kPiecesDone = 0x88126E,
     // The game mode dispatcher (ROM 0x3262): reads the mode from $FFDFDE and
     // jumps to its handler, which then runs its own loop. This is the only
     // point the game passes through between scenes, so it is where a stage the
@@ -80,6 +88,21 @@ constexpr uint8_t kSoundStopMusic = 0xF1;
 // Z80 RAM: non-zero while the game is paused and the driver holds the music.
 constexpr uint32_t kZ80Paused = 0x1C10;
 
+// MARINA MADNESS draws its clouds and sea (issue #36) as four screen-fixed
+// 32X objects at X 160, each a two-piece mapping (in the ROM's 68K bank at
+// 0x9D944C): the same frame of bank 34 at X - h and X + h, h = 96 for the
+// clouds and 80 for the three bands of sea below them. The two copies meet at
+// X, so the picture repeats every 2h; but they cover only X - 2h .. X + 2h,
+// -32..352 and 0..320, and the margins showed the sky behind them. In a
+// widened level the hook at kPiecesDone pushes more copies of the same
+// command, 2h apart, until the clip rectangle is covered. The mappings are
+// told by their address and checked by their bytes: two pieces, the same
+// line and frame, X - h and X + h, no flags.
+inline constexpr uint32_t kBackdropMaps[] = {0x9D944C, 0x9D9454, 0x9D945C, 0x9D9464};
+// The game stops adding objects to the command list once a5 is below this
+// (68K 0x8811CA); the extra copies keep above it.
+constexpr uint32_t kCommandListLimit = 0xD0A0;
+
 // Plane A struct in 68K work RAM: +0 camera X, +8 right bound, +A left bound,
 // +10 camera Y, +C bottom bound, +E top bound.
 constexpr uint32_t kPlaneAStruct = 0xC1DE;
@@ -97,7 +120,7 @@ constexpr uint32_t kSceneLevel = 0xDFF4;
 
 // Sorted: the interpreter binary-searches this list.
 inline constexpr uint32_t kM68kHooks[] = {
-    kRingCullLo, kRingCullHi, kRingCullDone, kRingCullExit, kModeDispatch,
+    kRingCullLo, kRingCullHi, kRingCullDone, kRingCullExit, kPiecesDone, kModeDispatch,
     kFullRedrawA, kRowsA_X, kFullRedrawB, kRowsB_X, kPlaneUpdateA, kRowUpA_X, kRowDownA_X,
     kColLeftA_X, kColRightA_X, kPlaneUpdateB, kColLeftB_X, kColRightB_X, kRowUpB_X, kRowDownB_X,
     kCamClampMax, kCamClampMin, kCamClampBottom, kFillSplitX, kSoundRequest,
@@ -112,6 +135,36 @@ static_assert(hooks_sorted(), "kM68kHooks must be sorted");
 
 constexpr bool is_m68k_hook(uint32_t pc) {
     for (uint32_t h : kM68kHooks)
+        if (h == pc) return true;
+    return false;
+}
+
+// Record-only SH-2 hooks (the 32X sprite recorder, runtime/sprite_record.h;
+// see docs/SPRITES_32X.md). They run before the instruction at these master
+// SH-2 addresses -- the entries of the SDRAM routines copied from ROM 0x77800
+// -- in the interpreter and in the generated code alike, read registers and
+// memory, and write nothing the machine sees, so lockstep still holds. A
+// routine run from another address (a ROM or cache-through copy) is not
+// hooked.
+enum : uint32_t {
+    kSh2RecolourCopy = 0x06000810,  // r1 graphic, r2 scratch buffer, r3 colour offset
+    kSh2Blit = 0x06001380,          // r1 X, r2 Y, r3 flags, r4 graphic
+    kSh2BlitScaled = 0x06001F18,    // also r5 SX, r6 SY (8.8)
+    kSh2BlitWarped = 0x060023EC,    // r1-r4, and r5 -> 16 bytes of stretch parameters
+};
+// Sorted, like kM68kHooks.
+inline constexpr uint32_t kSh2Hooks[] = {kSh2RecolourCopy, kSh2Blit, kSh2BlitScaled, kSh2BlitWarped};
+constexpr uint32_t kSh2HookCount = uint32_t(sizeof kSh2Hooks / sizeof kSh2Hooks[0]);
+
+constexpr bool sh2_hooks_sorted() {
+    for (size_t i = 1; i < kSh2HookCount; ++i)
+        if (kSh2Hooks[i - 1] >= kSh2Hooks[i]) return false;
+    return true;
+}
+static_assert(sh2_hooks_sorted(), "kSh2Hooks must be sorted");
+
+constexpr bool is_sh2_hook(uint32_t pc) {
+    for (uint32_t h : kSh2Hooks)
         if (h == pc) return true;
     return false;
 }
@@ -187,8 +240,8 @@ constexpr uint8_t kLevelPlaneSize = 0x01;
 // that fill and clears the whole widened line instead, unmoved; moved, it
 // would leave the right of the picture uncleared.
 //
-// The code patch bumps sdram_code_epoch, so recompiled code that covers those
-// bytes is revalidated and the interpreter runs the patched routine.
+// The recompiled code reads those immediates as it runs (see
+// is_patched_sh2_immediate below), so it stays valid when they change.
 constexpr uint32_t kSpecialRectSdram = 0x3844;
 constexpr int16_t kSpecialRect[4] = {16, 303, 4, 219};
 // The stage frames its 4:3 picture with black Mega Drive sprites of this
@@ -216,6 +269,62 @@ struct CentreAdd { uint32_t sdram; uint8_t reg; };
 constexpr CentreAdd kSpecialCentreAdds[] = {
     {0x414A, 0}, {0x4444, 4}, {0x4558, 0}, {0x45D0, 0}, {0x4C60, 0},
 };
+// Two more scenes are drawn by that polygon code, with the screen's own
+// rectangle (kFullRect) rather than the stage's (issues #38 and #39), and are
+// widened with the same machinery: the rectangle becomes [0, 319 + 2C], the
+// polygons are drawn C px further right and their pixels are moved back by C.
+// Only where the polygons get their X differs.
+//
+// The results screen after a cleared stage ("GOT THE CHAOS RING"). The master
+// SH-2, idle between commands, calls the routine at SDRAM 0x06007640 once a
+// vblank (0x060011C4); the special stage's SDRAM image (from ROM, at
+// kSdramImageRom + offset) has one there that draws the fixed list of polygons
+// at 0x06007688: a long `00 COLOUR FLAGS N`, then N vertices (int16 x, y), up
+// to a zero long. It is a 2D design laid out for 320 columns: every
+// background polygon touches x = 0 or x = 319. Widened, the list's vertices
+// get x + C, and those on the screen's edges go to the widened edges (0 and
+// 319 + 2C), so the background reaches the margins; nothing else moves. The
+// results screen only ever follows the stage, which is how it is told from
+// the stage's intro, the one other time this rectangle and code are loaded.
+//
+// The bonus stage (issue #38) draws its items with the blitters and a few
+// polygons, and clears each line it draws on with one fill: word 0 of the
+// line, length register kBonusClearLen, data 0 (kept whole, as the stage's
+// clear is). Its tunnel is a Mega Drive plane picture of concentric rings
+// that ends at the 4:3 edges. Each ring is a run of palette indices 1..12,
+// one index per w px, with w one more for every ring further out (1 px from
+// r = 80, then 2, 3, 4 at the screen's corners); the palette cycles them. The
+// margins carry the rings on (Vdp::radial_lut), measured from the picture
+// itself, so they cycle with it. A picture that is not rings centred on the
+// screen is not widened.
+enum class PolyScene : uint8_t { None, Stage, Results, Bonus };
+constexpr int16_t kFullRect[4] = {0, 319, 0, 223};
+constexpr uint32_t kSdramImageRom = 0x77800;
+constexpr uint32_t kResultsCodeSdram = 0x7640;
+constexpr uint32_t kResultsTableSdram = 0x7688;
+constexpr uint32_t kResultsTableEnd = 0x7818;
+constexpr uint16_t kBonusClearLen = 160;
+// The bonus stage's polygons come from the 68K as offsets from the screen
+// centre, which the boot code's handler ($06000CD0) puts at X 160 with
+// MOV #-96,R10 (then EXTU.B, SHLL16) followed by MOV #112,R11. Widened, that
+// immediate becomes 160 + C, and the polygons' pixels are moved back by C.
+constexpr uint32_t kBonusCentreSdram = 0x0CE6;
+constexpr uint16_t kBonusCentreNext = 0xEB70;
+constexpr int kBonusCentre = 160;
+// The same handler places the items it draws from that centre too, then
+// blits them scaled (kSh2BlitScaled) from 0x06000DF2, returning here. They are
+// drawn with the overwrite image, which is not moved back, so the hook there
+// takes the shift off their X instead (sh2_hook). The HUD and the items the
+// 68K places itself are blitted from elsewhere, unchanged.
+constexpr uint32_t kBonusItemReturn = 0x06000DF6;
+// Ring colours by radius, in quarter pixels, far enough for the corners of
+// the widest margins (r = 266 at kMaxWideExtra).
+constexpr int kRadialLen = 4 * 288;
+
+// The fill the widened scene clears a whole line with (the special stage's
+// or the bonus stage's), which then clears the margins too, unmoved.
+bool is_widened_clear(const Machine& m, uint32_t word_addr, uint32_t words, uint16_t data);
+
 // The level HUD (issue #28). The SH-2 draws SCORE, TIME and RINGS from the
 // 68K's HUD command ($06000C9C), at base positions that are immediates in the
 // boot code: MOV #32,R1 then MOV #16/#32/#48,R2. With Machine::wide_hud_edges
@@ -223,18 +332,38 @@ constexpr CentreAdd kSpecialCentreAdds[] = {
 // left margin that shows the level (margin_cut blacks out the rest near a
 // level's start), so the HUD keeps to the left edge of the picture. The level
 // clip already reaches into the margin, and its pixels there go to the
-// shadow like any sprite's. Like the special stage's code patch, this bumps
-// sdram_code_epoch.
+// shadow like any sprite's. Like the special stage's adds, the recompiled code
+// reads these immediates as it runs.
 struct HudBase { uint32_t sdram; uint16_t next; };
 constexpr HudBase kHudBaseX[] = {
     {0x0CA2, 0xE210}, {0x0CAC, 0xE220}, {0x0CB4, 0xE230}, {0x0CC0, 0xE210}, {0x0CCA, 0xAFF4},
 };
 constexpr int kHudX = 32;
 
+// The SH-2 immediates above change at run time: the special stage's ADD #80
+// pairs, the HUD's MOV #32 and the bonus stage's centre. Code covering them
+// used to fail validation and run in the interpreter (the patches bumped sdram_code_epoch to make sure of
+// it), and those routines are the special stage's busiest (issue #31: it
+// lagged on a slow PC in widescreen). The recompiler emits
+// these instructions with the immediate byte read from SDRAM as they run, and
+// leaves that byte, and only that byte, out of the validated code.
+// `sdram` is the SDRAM offset of the instruction word.
+constexpr bool is_patched_sh2_immediate(uint32_t sdram) {
+    for (const CentreAdd& c : kSpecialCentreAdds)
+        if (sdram == c.sdram || sdram == c.sdram + 2) return true;
+    for (const HudBase& h : kHudBaseX)
+        if (sdram == h.sdram) return true;
+    return sdram == kBonusCentreSdram;
+}
+
 // The special stage is drawing its tube: its code is loaded and the stage's
 // own rectangle, or the widened one, is set (its intro and results use other
 // rectangles, and the levels the rectangle of other scenes).
 bool special_stage_active(const Machine& m);
+// The results screen and the bonus stage (see PolyScene).
+bool results_screen_active(const Machine& m);
+// Fills lut (kRadialLen entries) with the tunnel's ring colours.
+bool bonus_tunnel(const Machine& m, uint8_t* lut);
 
 // A frame counts as a level scene when the level engine's per-frame plane
 // update ran in the last 8 frames (it skips a few while a level loads), or,
@@ -283,6 +412,12 @@ MarginCut margin_cut(const Machine& m, int extra);
 // the 32X clip override. Runs identically in every machine, so lockstep
 // comparison still holds.
 void begin_frame(Machine& m);
+
+// The master SH-2's hooks at kSh2Hooks, while a scene needs them (the widened
+// bonus stage: kBonusItemReturn). Like the 68K hooks, they run before the same
+// instruction in the interpreter and the recompiled code, and depend only on
+// machine state, so lockstep holds.
+void sh2_hook(Machine& m, sh2::State& c, uint32_t pc);
 
 // Installs the hooks on the machine's 68K (called from Machine::reset).
 void install(Machine& m);

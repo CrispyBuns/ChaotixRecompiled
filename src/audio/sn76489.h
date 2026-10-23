@@ -15,6 +15,12 @@ public:
     // Host-side output level of tones 1-3 and noise (see Ym2612::gain).
     float gain[4] = {1, 1, 1, 1};
 
+    // Save states (runtime/save_state.h): every field of the chip's state, in
+    // a fixed order, through the archive `a`. Not gain, the host's.
+    template <class A> void state_io(A& a) {
+        a(tone_); a(vol_); a(noise_); a(latch_); a(counter_); a(out_); a(lfsr_); a(div_); a(last_);
+    }
+
 private:
     uint16_t tone_[3] = {0, 0, 0};
     uint8_t vol_[4] = {15, 15, 15, 15};

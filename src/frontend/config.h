@@ -1,6 +1,7 @@
 // User settings (Config/chaotix.ini). Plain "key = value" lines grouped in
 // [Sections]; unknown keys are preserved on save.
 #pragma once
+#include "frontend/fast_forward.h"
 #include "renderer/viewport.h"
 #include <map>
 #include <set>
@@ -10,6 +11,13 @@ namespace chaotix {
 
 enum class WindowMode { Windowed, Borderless, Fullscreen };
 enum class TouchMode { Auto, On, Off };
+
+// Rewind's default (issue #40): on where memory and power are plentiful, off
+// on phones and tablets, where it costs battery and up to 32 MB every frame
+// of play whether or not it is ever used, and needs a button the touch
+// layout does not show unless asked.
+bool rewind_default();
+constexpr int kStateSlots = 4;
 
 struct Config {
     // [Game]
@@ -30,7 +38,21 @@ struct Config {
     bool wide_everywhere = false;
     // In widened levels, the HUD at the picture's left edge (issue #28).
     bool wide_hud = true;
+    // Issue #8: the menu's labels in the game's own font (read from the ROM)
+    // rather than the bundled pixel face, and pictures of the game's zones
+    // (rendered from the ROM and cached) behind it rather than plain colour.
+    bool menu_game_font = true;
+    // MENU BACKGROUND (issue #37): "Cycle" (the zones in turn, the next one
+    // each time the menu opens), "Plain", or one zone's `zone` key from
+    // frontend/backdrop.h ("WorldEntrance", "MarinaMadness", ...).
+    std::string menu_background = "Cycle";
+    bool menu_backdrop_on() const { return menu_background != "Plain"; }
+    // The chosen zone's index in backdrop_specs(); -1 for Cycle and Plain.
+    int menu_backdrop_zone() const;
     bool achievements = true;  // local achievement tracking (assets/achievements.ini)
+    // Write each graphic drawn (Mega Drive tiles, 32X sprites) to
+    // Mods/Textures/Dump (issue #35).
+    bool dump_graphics = false;
     // [Audio]
     bool audio = true;
     int volume = 80;  // percent: everything
@@ -45,6 +67,9 @@ struct Config {
     TouchMode touch = TouchMode::Auto;
     bool six_button = true;
     bool touch_stick = false;  // the touch directions as a joystick (issue #30)
+    bool touch_sonic_cd = false;  // Sonic CD (2013) touch layout (issue #34)
+    int touch_opacity = 65;           // touch controls at rest, percent (issue #33)
+    int touch_pressed_opacity = 100;  // and held
     // What drives each player: "auto" (the keyboard and every gamepad the
     // other player has not claimed), "keyboard", "pad1".."padN", or "none".
     std::string device[2] = {"auto", "none"};
@@ -52,6 +77,29 @@ struct Config {
     // buttons the emulated 6-button pad does not use are offered, so binding
     // one never costs the game a button. SDL gamepad button name.
     std::string menu_button = "leftstick";
+    // Fast-forward (issue #45): the key (SDL key name), the gamepad button
+    // (SDL gamepad button name, or "lefttrigger" / "righttrigger", or "none"),
+    // an on-screen button (off by default), held or toggled, and how fast.
+    // MAX is what fast-forward always did, so it stays the default.
+    std::string ff_key = "Tab";
+    std::string ff_button = "righttrigger";
+    bool touch_ff = false;
+    FastForwardMode ff_mode = FastForwardMode::Hold;
+    FastForwardSpeed ff_speed = FastForwardSpeed::Max;
+    // Save states and rewind (issue #40): keys (SDL key names) for quick
+    // save, quick load, the next slot and rewind (held); gamepad buttons (as
+    // ff_button). Saving and loading start with no pad button, so nobody
+    // overwrites a state by brushing a button; rewind takes the left trigger,
+    // fast-forward's opposite. The on-screen rewind button is off, like
+    // fast-forward's.
+    std::string state_save_key = "F8";
+    std::string state_load_key = "F9";
+    std::string state_slot_key = "F10";
+    std::string rewind_key = "Backspace";
+    std::string state_save_button = "none";
+    std::string state_load_button = "none";
+    std::string rewind_button = "lefttrigger";
+    bool touch_rewind = false;
     // Mega Drive button name -> what produces it, one set per player so two
     // people can share a keyboard or two controllers behave differently.
     // keys*: SDL key names. pads*: SDL gamepad button names.
@@ -74,6 +122,10 @@ struct Config {
     // Action Replay codes of the player's own ("FFE009:63 + FFADFC:01").
     std::set<std::string> cheats;
     std::string cheat_codes;
+    // [Extras] Rewind on or off, and the slot quick save and quick load use
+    // (1..kStateSlots).
+    bool rewind = rewind_default();
+    int state_slot = 1;
     // [Debug]
     bool debug_overlay = false;
     bool use_recompiled = true;
@@ -86,6 +138,10 @@ struct Config {
 };
 
 const char* window_mode_name(WindowMode m);
+// A `MenuBackground` value as it is kept: Cycle, Plain or a zone's key, in
+// their own spelling, case ignored on the way in. The value from before
+// issue #37, Zone, is Cycle; so is anything unknown.
+std::string parse_menu_background(const std::string& v);
 
 // Best times. 0 means there is none yet; record_best returns true when the
 // time is an improvement (and stores it).

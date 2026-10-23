@@ -1,5 +1,6 @@
 // See stage_select.h for where each address and table came from.
 #include "runtime/stage_select.h"
+#include "runtime/rom.h"
 #include "runtime/system.h"
 
 #include <cstdio>
@@ -32,6 +33,7 @@ enum : uint32_t {
     kRings = 0xE008,
     kSpecialLevel = 0xE01A,
     kSpecialPlayer = 0xE048,
+    kSaveSlot = 0xE01C,    // DATA slot the level end saves to; -1 is NO SAVE
 };
 
 constexpr uint16_t kModeLevel = 0x18;
@@ -48,6 +50,34 @@ std::string format_time(int frames) {
     char out[32];
     std::snprintf(out, sizeof out, "%d'%02d\"%02d", cs / 6000, (cs / 100) % 60, cs % 100);
     return out;
+}
+
+std::vector<std::string> character_names(const Rom& rom) {
+    constexpr uint32_t kTable = 0x077254;  // $8F7254
+    constexpr size_t kLongest = 30;
+    std::vector<std::string> names;
+    for (int id = 0; id < kCharacterCount; ++id) {
+        std::string name;
+        bool ok = false;
+        const uint32_t at = kTable + 2 * uint32_t(id);
+        if (at + 2 <= rom.file_size) {
+            // The offset is signed and counted from the word itself.
+            const uint32_t text = uint32_t(int32_t(at) + int16_t(rom.read16(at)));
+            for (uint32_t p = text; p < rom.file_size && name.size() <= kLongest; ++p) {
+                const uint8_t ch = rom.data[p];
+                if (!ch) { ok = true; break; }
+                if (ch < 0x20 || ch > 0x7E) break;
+                name.push_back(char(ch));
+            }
+        }
+        while (!name.empty() && name.back() == ' ') name.pop_back();
+        names.push_back(ok && name.size() <= kLongest ? name : std::string(kCharacters[id]));
+    }
+    return names;
+}
+
+bool is_placeholder_name(const std::string& name) {
+    return name.find_first_not_of('*') == std::string::npos;
 }
 
 bool has_level(int place, int level) {
@@ -69,6 +99,12 @@ bool valid(const Request& r) {
 }
 
 void apply(Machine& m, const Request& r) {
+    // The stage select's own set-up ($8F6FD8) makes the run NO SAVE before
+    // anything is chosen. Skipping it left the slot at the 0 the title
+    // screen has, which is DATA 1: the end of every level reached this way
+    // saved the run over DATA 1 ($890FD2), and once BACK TO TITLE kept the
+    // save that reached the disk.
+    wr16(m, kSaveSlot, 0xFFFF);
     wr16(m, kPlaceVar, r.place);
     wr16(m, kLevel, r.level);
     wr16(m, kAtTime, r.attime);

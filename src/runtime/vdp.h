@@ -2,9 +2,12 @@
 // interrupts and a scanline renderer producing RGB + "backdrop" info that the
 // compositor merges with the 32X layer.
 #pragma once
+#include <memory>
 #include <cstdint>
 
 namespace chaotix {
+
+class TileReplacer;
 
 struct VdpHost {
     void* user = nullptr;
@@ -20,6 +23,8 @@ public:
     static constexpr int kMaxWidth = 320 + 2 * kMaxExtra;
 
     uint8_t vram[0x10000];
+    // Modders' tiles (issue #35), shared by copies of the machine; output only.
+    std::shared_ptr<TileReplacer> tiles;
     uint16_t cram[64];
     uint16_t vsram[40];
     uint8_t reg[32];
@@ -29,6 +34,18 @@ public:
     // stage hides the black columns its sprites frame the 4:3 picture with
     // (runtime/patches.h). 0xFFFF: none.
     uint16_t hidden_frame_tile = 0xFFFF;
+    // Host-only: plane A outside the native columns is a picture of
+    // concentric rings, given as colour (palette line 0) by distance from the
+    // centre (cx2 / 2, cy2 / 2) in quarter pixels; the widened bonus stage
+    // (runtime/patches.h, issue #38). radial_len 0: none.
+    const uint8_t* radial_lut = nullptr;
+    int radial_len = 0;
+    int radial_cx2 = 0, radial_cy2 = 0;
+    // Host-only: the widescreen margins the picture shows game content in
+    // (columns beyond each side, rows below the active area); 0 where they
+    // are black bars. Text replaced by sprite (sprite_text.h) treats a
+    // sprite as off screen only beyond them.
+    int shown_extra = 0, shown_extra_bottom = 0;
 
     // control port state
     bool cmd_pending = false;

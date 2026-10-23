@@ -16,8 +16,20 @@ add_executable(chaotix_tests
     test_music_mods.cpp
     test_cheats.cpp
     test_volumes.cpp
+    test_rom_patch.cpp
+    test_tile_replace.cpp
+    test_text_replace.cpp
+    test_sprite_text.cpp
+    test_image_io.cpp
+    test_sprite_record.cpp
+    test_sprite_replace.cpp
+    test_sprite_sheet.cpp
+    test_character_mods.cpp
+    test_game_font.cpp
+    test_save_state.cpp
 )
-target_link_libraries(chaotix_tests PRIVATE chaotix_game chaotix_runtime)
+find_package(Threads REQUIRED)  # test_game_font plays beside a backdrop thread
+target_link_libraries(chaotix_tests PRIVATE chaotix_game chaotix_runtime Threads::Threads)
 
 # The in-game menu is part of the frontend, so its test only exists where SDL
 # is available. It drives the menu with key presses; nothing is drawn.
@@ -26,9 +38,11 @@ if(CHAOTIX_BUILD_FRONTEND)
         test_sdl_rom_import.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/sdl_rom_import.cpp
         test_menu.cpp
+        test_state_menu.cpp
         test_time_attack.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/menu.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/ui.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/backdrops.cpp
         ${CMAKE_SOURCE_DIR}/src/frontend/config.cpp
         ${CHAOTIX_EMBEDDED_SOURCES})
     target_link_libraries(chaotix_tests PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)
@@ -50,6 +64,75 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
             set_tests_properties(rom_startup PROPERTIES TIMEOUT 180)
         endif()
     endif()
+    # Issue #35: ROM patches from the Mods folder, over data and over code.
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME rom_patches
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_rom_patches.py"
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}" "${CHAOTIX_GENERATED_DIR}/recomp_tables.cpp")
+        set_tests_properties(rom_patches PROPERTIES TIMEOUT 900)
+        # Mega Drive tile replacement: the level's own tiles as a pack change nothing.
+        add_test(NAME tile_pack
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_tile_pack.py"
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
+        set_tests_properties(tile_pack PROPERTIES TIMEOUT 900)
+        # Mega Drive text by tile sequence: OPTIONS on the title menu, found
+        # in the dump, replaced there only, in lockstep; no pattern, no change.
+        add_test(NAME md_text
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_md_text.py"
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
+        set_tests_properties(md_text PROPERTIES TIMEOUT 900)
+        # Mega Drive text by sprite: DATA LOAD's banner letters, found in the
+        # dump, replaced there only, in lockstep; no pattern, no change.
+        add_test(NAME md_sprite_text
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_md_sprite_text.py"
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
+        set_tests_properties(md_sprite_text PROPERTIES TIMEOUT 900)
+        # 32X sprite replacement: the graphics dumped in a level, the title,
+        # the lobby, the bonus and the special stage, as a pack, change no
+        # picture, in widescreen and 4:3, and lockstep holds; changed ones
+        # change only the sprites.
+        add_test(NAME sprite_pack
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_sprite_pack.py"
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
+        set_tests_properties(sprite_pack PROPERTIES TIMEOUT 1800)
+        # Whole-bank sprite sheets: the characters' sheets exported from the
+        # ROM, loaded unchanged, change no picture in a level and the lobby,
+        # with lockstep holding; a recoloured sheet changes its character only.
+        add_test(NAME sprite_sheets
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_sprite_sheets.py"
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
+        set_tests_properties(sprite_sheets PROPERTIES TIMEOUT 1800)
+        # Character mods (Mods/Characters): colours the ROM's own change no
+        # picture, another character's change only its pixels, stats change
+        # movement; lockstep holds and the 68K stays native throughout.
+        add_test(NAME character_mods
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_character_mods.py"
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
+        set_tests_properties(character_mods PROPERTIES TIMEOUT 1800)
+        # Save states (issue #40): saved mid-level, in the special stage, in a
+        # widescreen level and the widescreen bonus stage, and loaded again,
+        # the game carries on with every picture and the whole machine
+        # identical to the run that never stopped, and lockstep holds from it.
+        add_test(NAME save_states_carry_on_bit_identically
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_save_states.py"
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
+        set_tests_properties(save_states_carry_on_bit_identically PROPERTIES TIMEOUT 900
+            PASS_REGULAR_EXPRESSION "all scenes carry on bit-identically")
+    endif()
+    # Rewind (issue #40): every snapshot still held is stepped back to and
+    # must be exactly the state it was taken from; the buffer keeps to its
+    # memory budget (the special stage changes most between frames).
+    add_test(NAME rewind_restores_every_snapshot_in_a_level
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2400 --wide 53
+                --stage 300:4:2:2:2:7:0 --fuzz 36:700:2400 --rewind 2:64)
+    add_test(NAME rewind_keeps_to_its_budget_in_the_special_stage
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2400
+                --stage 300:10:3:0:4:3:0 --fuzz 7:700:2400 --rewind 2:16)
+    set_tests_properties(rewind_restores_every_snapshot_in_a_level PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "rewind: stepped back through 1200 snapshots, 1200 restored exactly, 0 wrong")
+    set_tests_properties(rewind_keeps_to_its_budget_in_the_special_stage PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "held in ((1[0-5]|[0-9])\\.[0-9]|16\\.0) MB of 16 MB.*restored exactly, 0 wrong")
     # Boot -> title -> menus -> DATA LOAD -> level, with gameplay input.
     set(_script
         --press 1750:start:5 --press 1950:start:5 --press 2300:start:5
@@ -128,6 +211,26 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
     set_tests_properties(widescreen_lobby_when_asked PROPERTIES TIMEOUT 600
         PASS_REGULAR_EXPRESSION "margins live from frame 5[0-9][0-9]")
 
+    # MARINA MADNESS's clouds and sea are four screen-fixed 32X objects, each
+    # two copies of one picture that cover only the 4:3 screen (issue #36:
+    # the band stopped at the 4:3 edges). Widened, more copies at the game's
+    # own spacing must be on the command list for both margins: the clouds
+    # (2 x 96 px apart) and the sea below them (2 x 80 px) ...
+    add_test(NAME widescreen_marina_madness_backdrop_fills_the_margins
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 901 --wide 53
+                --stage 300:4:1:0:2:7:0 --sprites-log 900)
+    set_tests_properties(widescreen_marina_madness_backdrop_fills_the_margins PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "bank  34 frame   0 x  448 y   90[^
+]*
+ *[0-9]+ bank  34 frame   0 x -128 y   90.*bank  34 frame   3 x  400 y  159[^
+]*
+ *[0-9]+ bank  34 frame   3 x  -80 y  159")
+    # ... and the interpreter and the recompiled code must add them alike.
+    add_test(NAME lockstep_widescreen_marina_madness
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2000 --wide 53 --lockstep
+                --stage 300:4:2:2:2:7:0 --fuzz 36:700:2000)
+    set_tests_properties(lockstep_widescreen_marina_madness PROPERTIES TIMEOUT 900)
+
     # The HUD at the picture's edge (issue #28) patches the SH-2 boot code;
     # the interpreter and the recompiled code must still agree.
     add_test(NAME lockstep_widescreen_hud_at_the_edge
@@ -162,6 +265,113 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
                 --stage 300:10:2:0:2:7:0 --poke 450:DFDE:00 --poke 450:DFDF:18)
     set_tests_properties(special_stage_is_widescreen_in_the_level_mode PROPERTIES TIMEOUT 600
         PASS_REGULAR_EXPRESSION "margins live from frame 4[0-4][0-9].*margins live for 7[0-9][0-9] frames in 1 stretches")
+    # Issue #31: the special stage ran in the interpreter (no coverage of it,
+    # and the widescreen patches invalidated its busiest routines), enough to
+    # lag a slow PC. It must run recompiled, widescreen included.
+    add_test(NAME special_stage_runs_recompiled
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1500 --wide 53
+                --stage 300:10:0:0:2:7:0 --fuzz 99:700:1500)
+    set_tests_properties(special_stage_runs_recompiled PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "\\(100\\.0% native\\); MSH2 (100\\.0|9[5-9]\\.[0-9])% native; SSH2 100\\.0% native")
+    # Recompiled, the special stage read the words it keeps after its code as
+    # the ROM's constants after it had changed them; this stage and input
+    # diverged from the interpreter at frame 1104.
+    add_test(NAME lockstep_special_stage_variables
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1300 --lockstep
+                --stage 300:10:3:0:4:3:0 --fuzz 7:700:2400)
+    set_tests_properties(lockstep_special_stage_variables PROPERTIES TIMEOUT 900)
+
+    # Issue #38: the bonus stage stayed 4:3. Its tunnel is a Mega Drive
+    # picture of rings, carried on into the margins; its items and polygons
+    # are drawn by the special stage's machinery (see patches.h, PolyScene).
+    # The margins must go live as the stage appears and stay for all of it;
+    # the native 320 columns must match a 4:3 machine's (give or take polygon
+    # edges); the interpreter and the recompiled code must agree; and the
+    # recorder must still rebuild every picture.
+    add_test(NAME bonus_stage_is_widescreen
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2400 --wide 53 --trace-wide
+                --stage 300:9:0:0:2:7:0 --fuzz 3:700:2400)
+    set_tests_properties(bonus_stage_is_widescreen PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "margins live from frame 4[5-6][0-9].*margins live for 1[3-9][0-9][0-9] frames in 1 stretches")
+    add_test(NAME bonus_stage_centre_matches_4_3
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2400 --wide 53 --compare-native
+                --min-centre-frames 1900 --stage 300:9:1:0:4:3:0)
+    add_test(NAME lockstep_bonus_stage_widescreen
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2400 --wide 53 --lockstep
+                --stage 300:9:0:0:2:7:0 --fuzz 3:700:2400)
+    add_test(NAME sprites_check_bonus_stage_widescreen
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3000 --stage 300:9:0:0:2:7:0 --fuzz 3:700:3000
+                --wide 80 --sprites-check)
+    set_tests_properties(bonus_stage_centre_matches_4_3 lockstep_bonus_stage_widescreen PROPERTIES TIMEOUT 900)
+    set_tests_properties(sprites_check_bonus_stage_widescreen PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "sprites check: [1-9][0-9]* pictures, [1-9][0-9]* bytes compared, 0 mismatches")
+    # Played from a level, the bonus stage keeps the level's game mode.
+    add_test(NAME bonus_stage_is_widescreen_in_the_level_mode
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1600 --wide 53 --trace-wide
+                --stage 300:9:0:0:2:7:0 --poke 600:DFDE:00 --poke 600:DFDF:18)
+    set_tests_properties(bonus_stage_is_widescreen_in_the_level_mode PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "margins live from frame 4[5-6][0-9].*margins live for 11[0-9][0-9] frames in 1 stretches")
+    # Issue #39: the results screen after a cleared special stage stayed 4:3.
+    # The stage is cut short (its rings, at SDRAM 0x7DF0, run out) and the
+    # result it would store on reaching the goal is put where the 68K reads
+    # it. The margins must stay live from the stage through the results, in
+    # one stretch; the centre must match 4:3; lockstep must hold.
+    set(_results --stage 300:10:0:0:2:7:0 --poke-sdram 1000:7DF0:03 --poke-fb 1200:1500:1FF:01)
+    add_test(NAME results_screen_is_widescreen
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1700 --wide 53 --trace-wide ${_results})
+    set_tests_properties(results_screen_is_widescreen PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "margins live from frame 4[0-4][0-9].*margins live for 12[0-9][0-9] frames in 1 stretches")
+    add_test(NAME results_screen_centre_matches_4_3
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1700 --wide 53 --compare-native
+                --min-centre-frames 1200 ${_results})
+    add_test(NAME lockstep_results_screen_widescreen
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1700 --wide 80 --lockstep ${_results})
+    set_tests_properties(results_screen_centre_matches_4_3 lockstep_results_screen_widescreen PROPERTIES TIMEOUT 900)
+
+    # 32X sprite recording (issue #35, docs/SPRITES_32X.md). The host-side
+    # rebuild of the blitters must be exact: random calls drawn by the game's
+    # own blitter code (interpreted) and by the rebuild must write the same
+    # bytes ...
+    add_test(NAME sprites_rebuild_matches_the_blitters
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --sprites-oracle 4000)
+    set_tests_properties(sprites_rebuild_matches_the_blitters PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "sprites oracle: 4000 calls, 0 differ")
+    # ... and every picture of these scenes, rebuilt from its draw list, must
+    # give back what the blitters left in the frame buffer, byte for byte:
+    # a level, the lobby, the bonus stage, the title and its menus, the
+    # special stage; with random input, in widescreen and 4:3.
+    add_test(NAME sprites_check_level_widescreen
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3000 --stage 300:0:1:0:2:7:0 --fuzz 1:700:3000
+                --wide 53 --sprites-check)
+    add_test(NAME sprites_check_lobby
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3000 --stage 300:7:0:0:2:7:0 --fuzz 2:700:3000
+                --wide 53 --sprites-check)
+    add_test(NAME sprites_check_bonus_stage
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3000 --stage 300:9:0:0:2:7:0 --fuzz 3:700:3000
+                --sprites-check)
+    add_test(NAME sprites_check_title_and_menus
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3000 --fuzz 4:1500:3000 --wide 53 --sprites-check)
+    add_test(NAME sprites_check_special_stage
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3000 --stage 300:10:0:0:2:7:0 --fuzz 5:700:3000
+                --wide 53 --sprites-check)
+    # A widened level whose fills reach the margins (Marina Madness).
+    add_test(NAME sprites_check_level_fills_in_the_margins
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2000 --stage 300:4:1:0:6:3:0 --fuzz 14:700:3000
+                --wide 53 --hud-edges --sprites-check)
+    set_tests_properties(sprites_check_level_widescreen sprites_check_lobby sprites_check_bonus_stage
+        sprites_check_title_and_menus sprites_check_special_stage sprites_check_level_fills_in_the_margins
+        PROPERTIES TIMEOUT 600 PASS_REGULAR_EXPRESSION "sprites check: [1-9][0-9]* pictures, [1-9][0-9]* bytes compared, 0 mismatches")
+    # The recorder's hooks run in the interpreter and the recompiled code at
+    # the same instructions: both machines record the same draw lists, and
+    # stay bit-identical.
+    add_test(NAME lockstep_sprites_level
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3000 --stage 300:0:1:0:2:7:0 --fuzz 6:700:3000
+                --wide 53 --lockstep --sprites-check)
+    add_test(NAME lockstep_sprites_bonus_stage
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2000 --stage 300:9:0:0:2:7:0 --fuzz 3:700:3000
+                --lockstep --sprites-check)
+    set_tests_properties(lockstep_sprites_level lockstep_sprites_bonus_stage PROPERTIES TIMEOUT 900
+        PASS_REGULAR_EXPRESSION "frames bit-identical.*sprites check: [1-9][0-9]* pictures, [1-9][0-9]* bytes compared, 0 mismatches")
 
     add_test(NAME golden_frames_16_9
         COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3200 --wide 53 ${_script}
@@ -243,6 +453,26 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
                 --replay-input ${CMAKE_CURRENT_SOURCE_DIR}/recordings/finished_run.txt)
     set_tests_properties(time_attack_matches_what_the_player_saw PROPERTIES TIMEOUT 600
         PASS_REGULAR_EXPRESSION "the run ended after 2086 frames .0.34.66.")
+
+    # The end of a level saves the run to the DATA slot in FFE01C ($890FD2).
+    # The title screen leaves that at 0, DATA 1, so a time attack run saved
+    # itself over DATA 1 until the request made it NO SAVE, as the game's own
+    # stage select does. The same run finishes without touching the save...
+    add_test(NAME time_attack_leaves_the_save_alone
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 4700
+                --replay-input ${CMAKE_CURRENT_SOURCE_DIR}/recordings/finished_run.txt)
+    set_tests_properties(time_attack_leaves_the_save_alone PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "the run ended after 2086 frames.*save RAM changed on 0 frames")
+
+    # ...and played into DATA 1 it saves as it ends, through the routine the
+    # save code copies into work RAM, which only the interpreter runs; the
+    # recompiled code and the interpreter must agree on it, save included.
+    add_test(NAME lockstep_a_finished_level_saves_to_its_data_slot
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 4700 --lockstep
+                --replay-input ${CMAKE_CURRENT_SOURCE_DIR}/recordings/finished_run.txt
+                --poke 1000:E01C:00 --poke 1000:E01D:00)
+    set_tests_properties(lockstep_a_finished_level_saves_to_its_data_slot PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "save RAM changed on 1 frames, the last at frame 4639.*lockstep: 4700 frames bit-identical")
 
     # Long-running validation (-DCHAOTIX_LONG_TESTS=ON, ctest -L long): full attract sequence.
     if(CHAOTIX_LONG_TESTS)

@@ -7,7 +7,7 @@ an average close to 60 FPS.
 
 The frontend now waits for the next game-frame deadline before polling input.
 It preserves the original approximately 59.92 FPS NTSC rate and fractional
-timing, keeps fast-forward and automated tests unthrottled, and retains bounded
+timing, keeps MAX fast-forward and automated tests unthrottled, and retains bounded
 catch-up after a stall. No emulation or rendering algorithm was changed.
 
 ## Windows measurements
@@ -46,3 +46,21 @@ display or a comparison against PicoDrive, which was not benchmarked.
 - Independent code review found no actionable issues.
 
 Local raw measurements and validation scripts are in `build/perf/`.
+
+## Fast-forward speeds (issue #45)
+
+Fast-forward now has a speed setting, and the number of frames a pass runs
+comes from `plan_pass` in `src/frontend/fast_forward.h` (unit-tested in
+`tests/test_frame_pacing.cpp`):
+
+- Normal: one emulated frame per elapsed frame period, at most three.
+- 2X / 4X: the same pacing (the pass still waits for the next frame
+  deadline, and catches up at most three periods), with two or four
+  emulated frames per period. Audio is kept and played at that ratio
+  (`SDL_SetAudioStreamFrequencyRatio`), on top of the usual 1% queue-depth
+  correction.
+- MAX: the previous behaviour, unchanged -- unthrottled, eight frames per
+  pass, the accumulator dropped, audio discarded.
+
+Fast-forward is forced off during a TIME ATTACK run and while the menu is
+open; a TOGGLE left on is forgotten then rather than coming back by itself.

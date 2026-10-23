@@ -3,6 +3,9 @@
 #include <SDL3/SDL.h>
 
 #include "frontend/setup.h"
+#ifdef SDL_PLATFORM_IOS
+#include "platform/ios_document_picker.h"
+#endif
 #include "platform/ui.h"
 #include "renderer/image_io.h"
 #include "runtime/log.h"
@@ -33,11 +36,13 @@ struct SetupState {
     bool rescan = true;
 };
 
+#ifndef SDL_PLATFORM_IOS
 void SDLCALL file_chosen(void* userdata, const char* const* files, int) {
     auto* st = static_cast<SetupState*>(userdata);
     st->dialog_open = false;
     if (files && files[0]) st->picked = files[0];
 }
+#endif
 
 // A button. Returns its rectangle so the caller can lay the next one out.
 SDL_FRect button(ui::Ui& g, SetupState& st, float x, float y, const std::string& label,
@@ -104,9 +109,15 @@ void draw(ui::Ui& g, const std::string& store_root, SetupState& st) {
         g.panel(box, ui::theme::surface, ui::theme::outline, g.px(10));
         g.text_fit(ui::Font::Body, x + g.px(14), y + g.px(10), column - g.px(28),
                    "No ROM found in the usual folders", ui::theme::warn);
+#ifdef SDL_PLATFORM_IOS
+        // Nothing can be dropped onto an iPhone app; the Files app can put
+        // the ROM into the app's folder, which is searched (Rescan).
+        const char* hint = "Copy it to this app's folder with the Files app, or use Browse.";
+#else
+        const char* hint = "Drop a file onto this window, or use Browse below.";
+#endif
         g.text_fit(ui::Font::Small, x + g.px(14), y + g.px(10) + g.line_height(ui::Font::Body),
-                   column - g.px(28), "Drop a file onto this window, or use Browse below.",
-                   ui::theme::text_dim);
+                   column - g.px(28), hint, ui::theme::text_dim);
         y += box.h + card_gap;
     } else {
         // Keep the highlighted row on screen when the list is longer than the
@@ -179,7 +190,6 @@ std::string run_setup_screen(SDL_Window* window, SDL_Renderer* renderer,
         LOGE("setup", "cannot initialise the setup screen (no font)");
         return "";
     }
-    const SDL_DialogFileFilter filters[] = {{"32X ROM", "32x;bin;md;gen;rom"}, {"All files", "*"}};
 
     auto report_error = [&](const std::string& detail) {
         LOGW("setup", "%s", detail.c_str());
@@ -198,8 +208,16 @@ std::string run_setup_screen(SDL_Window* window, SDL_Renderer* renderer,
     };
     auto browse = [&]() {
         if (st.dialog_open) return;
+#ifdef SDL_PLATFORM_IOS
+        // SDL has no file dialog on iOS: the system's picker, which returns
+        // once a file is chosen.
+        const char* documents = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
+        st.picked = ios_pick_document(window, documents ? documents : "");
+#else
+        static const SDL_DialogFileFilter filters[] = {{"32X ROM", "32x;bin;md;gen;rom"}, {"All files", "*"}};
         st.dialog_open = true;
         SDL_ShowOpenFileDialog(file_chosen, &st, window, filters, 2, nullptr, false);
+#endif
     };
 
     for (;;) {

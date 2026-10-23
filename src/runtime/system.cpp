@@ -3,6 +3,7 @@
 #include "cpu/m68k/m68k_interp.h"
 #include "runtime/patches.h"
 #include "cpu/sh2/sh2_interp.h"
+#include "runtime/sprite_record.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -325,7 +326,10 @@ void Machine::start_line() {
     z80.irq_line = line == kActiveLines ? 1 : 0;  // Z80 /INT for one line at V-blank
     if (line == kActiveLines) {
         // V-blank start: 32X frame buffer swap and V interrupt.
-        if (mars.fb_display != mars.fb_select_req) mars.fb_display = mars.fb_select_req;
+        if (mars.fb_display != mars.fb_select_req) {
+            mars.fb_display = mars.fb_select_req;
+            if (sprites) sprites->flipped(*this);
+        }
         for (int c = 0; c < 2; ++c) mars.irq_pending[c] |= 0x08;
     }
     // 32X H interrupt every (HCOUNT + 1) lines.
@@ -348,7 +352,17 @@ void Machine::render_output_line(int src_line, int dst_row) {
     const int n = vdp.width() + 2 * extra;
     uint32_t md[Vdp::kMaxWidth];
     uint8_t bg[Vdp::kMaxWidth];
-    vdp.hidden_frame_tile = wide_special ? patches::kSpecialFrameTile : 0xFFFF;
+    // The bonus stage and the results screen use the whole screen.
+    const patches::PolyScene scene = patches::PolyScene(poly_scene);
+    const bool stage = wide_special && scene != patches::PolyScene::Bonus && scene != patches::PolyScene::Results;
+    vdp.hidden_frame_tile = stage ? patches::kSpecialFrameTile : 0xFFFF;
+    vdp.radial_lut = radial_lut;
+    vdp.radial_len = radial_len;
+    vdp.radial_cx2 = kNativeWidth;
+    vdp.radial_cy2 = kActiveLines;
+    vdp.shown_extra = wide_active ? extra : 0;
+    vdp.shown_extra_bottom =
+        wide_active && !wide_special ? std::clamp(wide_extra_bottom, 0, patches::kMaxWideExtraBottom) : 0;
     vdp.render_line(src_line, md, bg, extra);
     uint32_t* row = framebuffer + dst_row * kScreenWidth;
     render_line32x(src_line, row, extra, wide_active);
@@ -360,13 +374,17 @@ void Machine::render_output_line(int src_line, int dst_row) {
         bool mdbg = bg[x] != 0;
         if (show32x || ((p >> 24) == 0xFD && mdbg)) row[x] = 0xFF000000u | (p & 0xFFFFFF);
         else row[x] = md[x];
+        // Debugging: one layer alone, the other shown as magenta.
+        if (debug_layer == 1) row[x] = md[x];
+        else if (debug_layer == 2 && !(show32x || ((p >> 24) == 0xFD && mdbg))) row[x] = 0xFFFF00FFu;
     }
     if (extra) {
         // Scenes without widescreen support: black side bars. In a level,
         // black out margin columns outside the level's camera range.
         patches::MarginCut cut{extra, extra};
         // The special stage's frame: black above and below its rectangle.
-        if (wide_special) cut = src_line < patches::kSpecialRect[2] || src_line > patches::kSpecialRect[3]
+        if (wide_special && !stage) cut = patches::MarginCut{};
+        else if (wide_special) cut = src_line < patches::kSpecialRect[2] || src_line > patches::kSpecialRect[3]
                                     ? patches::MarginCut{extra, extra} : patches::MarginCut{};
         else if (wide_active) cut = patches::margin_cut(*this, extra);
         for (int x = 0; x < cut.left; ++x) row[x] = 0xFF000000u;
@@ -390,8 +408,27 @@ void Machine::end_line() {
     }
 }
 
+namespace {
+void machine_sh2_hook(sh2::State* c, uint32_t pc) {
+    Machine* m = static_cast<Machine*>(c->hook_user);
+    patches::sh2_hook(*m, *c, pc);
+    if (m->sprites) sprite_sh2_hook(c, pc);
+}
+} // namespace
+
 void Machine::run_frame() {
     patches::begin_frame(*this);
+    // The sprite recorder's hooks, on the master SH-2 (the only one that
+    // draws). Set every frame: a copy of a machine shares the recorder but
+    // must report its own state.
+    // The widened bonus stage moves its items' X there too (patches.h,
+    // kBonusItemReturn), before the recorder sees them.
+    sh2::State& ms = sh2[0];
+    const bool bonus = wide_special && patches::PolyScene(poly_scene) == patches::PolyScene::Bonus;
+    ms.hook = bonus ? machine_sh2_hook : sprites ? sprite_sh2_hook : nullptr;
+    ms.hook_user = this;
+    ms.hook_pcs = patches::kSh2Hooks;
+    ms.hook_count = patches::kSh2HookCount;
     for (line = 0; line < kLinesPerFrameNTSC; ++line) {
         line_start_mclk = mclk;
         start_line();

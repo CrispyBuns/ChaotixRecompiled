@@ -19,9 +19,13 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace chaotix {
+
+class SpriteRecorder;
+class CharacterPalettes;
 
 constexpr int kMclkPerLine = 3420;
 constexpr int kLinesPerFrameNTSC = 262;
@@ -128,6 +132,9 @@ struct SliceInfo {
     int32_t budget = 0;
 };
 
+// Save states (runtime/save_state.cpp, `transfer`) list the fields below that
+// the emulation depends on: a new one belongs there too, or a loaded state
+// will not carry on as the machine would have.
 class Machine {
 public:
     Machine();
@@ -163,16 +170,27 @@ public:
     // Widened levels draw the HUD at the picture's left edge rather than at
     // its 4:3 place (issue #28; runtime/patches.h, kHudBaseX).
     bool wide_hud_edges = false;
+    int debug_layer = 0;  // output only: 1 = the Mega Drive layer alone, 2 = the 32X layer alone
     int plane_shift = 0;               // W latched by the plane streaming patch
     uint64_t level_seen_frame = ~0ull; // last frame the level engine ran (patches.cpp)
     uint64_t full_redraw_frame = ~0ull; // last frame a scene redrew both planes
     uint64_t level_scene = 0;          // scene the level engine last ran in (patches.cpp)
     bool wide_active = false;          // margins show game content this frame
     bool clip_overridden = false;      // 32X clip rect widened by the patch
-    // The special stage is the widescreen scene this frame (wide_active is
-    // then also set). Its polygons are filled, not blitted: see patches.h.
+    // A scene drawn by the special stage's polygon code is the widescreen
+    // scene this frame (wide_active is then also set): the stage, its results
+    // screen or the bonus stage (poly_scene). Their polygons are filled, not
+    // blitted: see patches.h.
     bool wide_special = false;
     bool special_rect_overridden = false;  // its polygon clip rect widened
+    // Which polygon scene is widened (patches::PolyScene); wide_special is
+    // set for all of them.
+    uint8_t poly_scene = 0;
+    bool results_table_patched = false;  // the results screen's polygons widened
+    bool bonus_clip_overridden = false;  // the bonus stage's blitter clip widened
+    // The bonus stage's rings by radius (Vdp::radial_lut); render only.
+    uint8_t radial_lut[512 * 4] = {};
+    int radial_len = 0;
     int special_shift = 0;             // px its polygons are drawn right of true
     int cull_shift = 0;                // pending d2 offset inside the ring cull patch
     bool plane_fill_clamped = true;    // last plane fill used the unmasked (clamped) form
@@ -198,6 +216,16 @@ public:
     void (*on_fb_write)(void* user, uint32_t off, uint32_t v, int size, bool overwrite) = nullptr;
     void (*on_fb_fill)(void* user, uint32_t word_addr, uint32_t words, uint16_t data) = nullptr;
     void* on_fb_write_user = nullptr;
+    // 32X sprite recording (runtime/sprite_record.h): the blitters' calls as
+    // draw lists, and with a sprite pack (runtime/sprite_replace.h) the 32X
+    // layer composed again with replacement graphics, which render_line32x
+    // shows. Output only, like the tile replacer: its SH-2 hooks write
+    // nothing the machine sees. Copies of a machine share it.
+    std::shared_ptr<SpriteRecorder> sprites;
+    // Character mods' colours (runtime/character_mods.h): the 32X palette
+    // render_line32x shows, with modded characters' entries substituted.
+    // Output only: CRAM itself is never changed. Copies of a machine share it.
+    std::shared_ptr<CharacterPalettes> characters;
 
     // Components
     Rom rom;
