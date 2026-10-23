@@ -14,7 +14,11 @@ same tiles, and a wider centred image reaches past the run.
 On DATA LOAD, switching slots changes the palette line of the slots' name
 table entries during a picture; the slot's NEW (three rows of the 8x16
 font's big letters), given a solid image, stays replaced in every picture
-of the switch (0.7.0 showed the English NEW for one picture).
+of the switch (0.7.0 showed the English NEW for one picture). The slots'
+headers (NO SAVE, DATA 1: nine tiles of the panel's top three rows) are
+cleared and written again during the pictures where the panel starts and
+stops sliding, before the beam reaches them; they stay replaced in those
+pictures too (0.7.1 fixed the English header shown for one picture).
 
 No ROM-derived pixels are written by the test: the pattern holds hashes
 taken from the dump, the images are solid colours.
@@ -269,6 +273,59 @@ class DataLoadSlots(unittest.TestCase):
         r = subprocess.run([HEADLESS, "--rom", ROM, "--frames", str(self.LAST + 1), *self.PRESS, *args],
                            capture_output=True, text=True, timeout=900)
         return r.stdout + r.stderr
+
+    def test_slot_headers_stay_replaced_while_the_panel_slides(self):
+        d = tempfile.mkdtemp(prefix="chaotix_mdtext_headers_")
+        self.run_slots("--frames", "2100", "--dump-graphics", os.path.join(d, "dump"))
+        # A header: a run of 9 tiles under two rows of the panel's frame (the
+        # same row of tiles, wider), the 9 tiles above it taken from those.
+        headers = []
+        for path in sorted(glob.glob(os.path.join(d, "dump", "Text", "text_*.txt"))):
+            with open(path, encoding="utf-8") as f:
+                runs = [(m.group(3), int(m.group(1)), int(m.group(2)), m.group(4).split()) for m in re.finditer(
+                    r"# run \d+: screen x (-?\d+) y (-?\d+).*\n(?:#.*\n)*plane (\w)\nrow (.*)\n", f.read())]
+            at = {(r[0], r[1], r[2]): r[3] for r in runs}
+            for (plane, x, y), tokens in sorted(at.items(), key=lambda kv: kv[0][2]):
+                if len(tokens) != 9:
+                    continue
+                for (p0, x0, y0), top in at.items():
+                    mid = at.get((plane, x0, y - 8))
+                    if p0 == plane and y0 == y - 16 and mid and len(mid) == len(top) and x0 <= x \
+                            and x + 72 <= x0 + 8 * len(top):
+                        k = (x - x0) // 8
+                        headers.append([top[k:k + 9], mid[k:k + 9], tokens])
+            if headers:
+                break
+        self.assertGreaterEqual(len(headers), 2, "no slot headers in the dump")
+        mods = os.path.join(d, "mods")
+        os.makedirs(mods)
+        for i, rows in enumerate(headers):
+            with open(os.path.join(mods, "mdtext_header%d.txt" % i), "w", encoding="utf-8") as f:
+                f.write("".join("row %s\n" % " ".join(row) for row in rows))
+            write_indexed_png(os.path.join(mods, "mdtext_header%d.png" % i), 72, 24, [[1] * 72] * 24,
+                              [(0, 0, 0)] + [(255, 255, 255)] * 15)
+        shots = ",".join(str(f) for f in range(self.FIRST, self.LAST + 1))
+        plain, modded = os.path.join(d, "plain"), os.path.join(d, "modded")
+        os.makedirs(plain)
+        os.makedirs(modded)
+        self.run_slots("--shot", shots, "--out", plain)
+        out = self.run_slots("--tiles", mods, "--shot", shots, "--out", modded)
+        self.assertIn("text: %d pattern(s) loaded" % len(headers), out, out[-2000:])
+        # Matching again during the picture changes nothing for the machine.
+        out = self.run_slots("--tiles", mods, "--lockstep")
+        self.assertIn("bit-identical", out, out[-2000:])
+        changed = []
+        for f in range(self.FIRST, self.LAST + 1):
+            name = "frame_%05d.png" % f
+            changed.append(changed_pixels(os.path.join(plain, name), os.path.join(modded, name)))
+        self.assertGreater(min(changed[:10]), 72 * 12, "the header is not replaced before the switch")
+        # The headers slide in and out of view, and behind the banner: a
+        # picture with far fewer replaced pixels than both of its neighbours
+        # (a header's worth, of one or two on screen) showed a header
+        # unreplaced for that one picture.
+        dips = [(self.FIRST + i, changed[i - 1], changed[i], changed[i + 1]) for i in range(1, len(changed) - 1)
+                if changed[i] < 0.6 * min(changed[i - 1], changed[i + 1])]
+        self.assertEqual(dips, [], "pictures with a header not replaced (frame, changed before, in it, after)")
 
     def test_switching_slots_shows_no_unreplaced_picture(self):
         d = tempfile.mkdtemp(prefix="chaotix_mdtext_slots_")

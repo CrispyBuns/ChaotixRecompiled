@@ -41,6 +41,11 @@ public:
     const uint8_t* radial_lut = nullptr;
     int radial_len = 0;
     int radial_cx2 = 0, radial_cy2 = 0;
+    // Host-only: the widescreen margins the picture shows game content in
+    // (columns beyond each side, rows below the active area); 0 where they
+    // are black bars. Text replaced by sprite (sprite_text.h) treats a
+    // sprite as off screen only beyond them.
+    int shown_extra = 0, shown_extra_bottom = 0;
 
     // control port state
     bool cmd_pending = false;

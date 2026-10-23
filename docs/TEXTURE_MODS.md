@@ -137,18 +137,37 @@ row c55f51f079e83c63 c47e6d034eb92447 61289eb94ebec2bf ee6410f28116fbcf c55f51f0
 
 ### How it is matched
 
-Once a picture, before it is drawn, the planes' name tables are searched for
-the patterns (indexed by their first tile, so the cost is small; nothing is
-done without a pattern). A match is a place in the plane, not on the screen,
-so it scrolls with the plane, by line or by column, as its tiles do. Where
+Before a picture is drawn, the planes' name tables are searched for the
+patterns (indexed by their first tile, so the cost is small; nothing is done
+without a pattern). A match is a place in the plane, not on the screen, so
+it scrolls with the plane, by line or by column, as its tiles do. Where
 matches overlap the one with the most tiles wins (then the one whose file
-name sorts first). A cell whose name table entry changes its tile or flips
-during the picture shows its tile again; a change of palette line or
-priority alone keeps the image, in the first tile's new colours (DATA LOAD
-dims and lights its slots that way while a picture is drawn; 0.7.0 showed
-the English text for that one picture). Like the other replacements this
-only changes the picture: the machine runs as without it, bit-identical in
-lockstep.
+name sorts first).
+
+The replacement follows what each line actually shows. Before a line is
+drawn, the name table rows it shows, and the rows above and below that a
+pattern on them could span, are compared with the rows as last matched; if
+any changed, the plane is searched again, with the name table as it is at
+that line. So:
+
+- Text the game writes into the name table in the middle of a picture is
+  replaced from the line it shows on.
+- Rows the game clears and writes again before the beam reaches them stay
+  replaced: when DATA LOAD's slot panel starts and stops sliding, the game
+  clears the panel's rows and rewrites them during the picture (0.7.0 showed
+  the English NO SAVE / DATA 1 for that one picture).
+- A change the screen shows is shown: a run whose tiles change while its
+  rows are drawn shows its tiles from that line on (or another pattern's
+  image, if the new tiles match one). A pattern several rows high is
+  checked whole, so a change in its lower rows made before they are drawn
+  already shows on the lines of its upper rows drawn after the change.
+- A change of palette line or priority alone keeps the image, in the first
+  tile's new colours (DATA LOAD dims and lights its slots that way while a
+  picture is drawn).
+
+Checking costs a comparison of a few rows per line, and only when a pattern
+is loaded. Like the other replacements this only changes the picture: the
+machine runs as without it, bit-identical in lockstep.
 
 Known limits:
 
@@ -159,8 +178,9 @@ Known limits:
 - A pattern matches whole tiles. Text that the game draws at different tile
   offsets, or that changes one tile (a digit in DATA 1 / DATA 2), needs a
   pattern per variant (DATA 1, DATA 2, ...).
-- The search happens once a picture: text the game writes into the name
-  table in the middle of a picture is replaced from the next one.
+- Tiles are recognised by their pixels as they are when the picture
+  starts: a letter tile the game uploads in the middle of a picture is
+  recognised from the next one.
 - The dump lists the native 320-pixel screen, not the widescreen margins
   (patterns match there too), and samples each tile row in its middle: on a
   plane scrolled by a fraction of a tile per line the listed run can differ.
@@ -231,8 +251,9 @@ sprite 32 0 3x3 cd9d0c4658f2da84 501a169d4c874f8f dbeeab7d6f977c77 2a3877ebf5817
 `mdsprite_<name>.png`, next to the `.txt`:
 
 - **Palette-indexed**: indices 1-15 are the colours of the **first
-  sprite's** palette line (as it is when each line is drawn), 0 is
-  transparent. Full-colour PNGs are refused.
+  sprite's** palette line (as it is when each line is drawn; the first
+  sprite present, when the group is partly off screen), 0 is transparent.
+  Full-colour PNGs are refused.
 - **Any size** (up to 1024 x 512). Its top-left is the sprites' bounding
   box's top-left (moved by `align` and `offset`): an image of the box's size
   (56x24 for PLAY) covers the sprites exactly; a larger one reaches past
@@ -240,20 +261,37 @@ sprite 32 0 3x3 cd9d0c4658f2da84 501a169d4c874f8f dbeeab7d6f977c77 2a3877ebf5817
 - The matched sprites are not drawn at all, so where the image is 0 what is
   behind them shows (the oval, the background).
 - The image is drawn as one sprite in the **first sprite's place** in the
-  sprite list: in front of the sprites after it in the list and behind the
-  sprites before it, and in front of or behind the planes as the first
-  sprite's priority bit says. It is not flipped.
+  sprite list (the first sprite present's): in front of the sprites after
+  it in the list and behind the sprites before it, and in front of or
+  behind the planes as that sprite's priority bit says. It is not flipped.
 
 ### How it is matched
 
 Once a picture, before it is drawn, the sprite table is followed along its
-links, as the VDP does. A match is a sprite showing the first line's tiles,
-size and flip with, for each other line, a sprite showing its tiles exactly
-that many pixels away (on screen, not in the list: the game may list them in
-any order). Where matches share sprites the pattern with the most tiles wins
-(then the one whose file name sorts first), so a pattern for one banner can
-be followed by patterns for its sprites alone without them breaking it.
-Patterns are indexed by their first tile; nothing is done without a pattern.
+links, as the VDP does. A match is a sprite showing one line's tiles, size
+and flip with, for each other line, a sprite showing its tiles exactly that
+many pixels away (on screen, not in the list: the game may list them in any
+order). Distances are measured as the VDP places sprites: its X is 9 bits,
+so a sprite placed past X 383 shows 512 pixels further left, and a member is
+looked for where the VDP would show it.
+
+A line may also have **no sprite** when that sprite would lie wholly off
+the screen: the game leaves out of the list the sprites beyond the screen's
+edge, so while a banner slides in or out (TRAINING leaving to the left as
+PLAY STYLE comes in from the right) only the sprites on screen are listed.
+The group still matches from the sprites that are there, as long as at
+least one is and each missing one would be wholly outside the picture:
+beyond the native screen and the widescreen margins where these show game
+content (a level's margins; the black bars beside the menus do not count).
+The image is placed from a sprite that is there and cut at the screen's
+edge like any sprite, so a banner's image slides with it; patterns for a
+banner's first or last sprites alone are not needed.
+
+Where matches share sprites the one with the most tiles present wins (then
+a whole group over one with sprites missing, then the pattern whose file
+name sorts first), so a pattern for one banner can be followed by patterns
+for its sprites alone without them breaking it. Patterns are indexed by
+each line's first tile; nothing is done without a pattern.
 
 While the picture is drawn, a matched group whose sprites move or change
 tiles is drawn as it is from that line on (its original sprites, no image);
@@ -266,7 +304,8 @@ Known limits:
 - A group is matched on one picture's table. Text the game draws with its
   sprites on alternate pictures (flickering, multiplexed), or whose sprites
   are placed one picture apart, matches on the pictures where the whole
-  group is there; on others the English sprites show.
+  group is there (or only off-screen sprites are missing); on others the
+  English sprites show.
 - The image is not cut by sprite masking (an X=0 sprite) or by the VDP's
   sprites-per-line limit, which would have cut the original sprites, and it
   does not count towards them (the flags follow the originals).

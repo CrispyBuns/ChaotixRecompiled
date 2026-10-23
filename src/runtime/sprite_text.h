@@ -11,20 +11,26 @@
 // bits and the hashes of its tiles in VRAM order (column by column, as the
 // VDP reads them: TileReplacer::hash, the same as md_<hash>.png). Once a
 // frame, before it is drawn, the sprite table is searched: a match is a
-// sprite showing the first member's tiles with, for each other member, a
-// sprite showing its tiles exactly that many pixels away. Where matches
-// share sprites the pattern with the most tiles wins (then the one loaded
-// first).
+// sprite showing one member's tiles with, for each other member, a sprite
+// showing its tiles exactly that many pixels away -- or, for a member the
+// game has left out of the list, nothing there because the member would be
+// wholly off screen (beyond the native screen and the widescreen margins
+// the picture shows): the game leaves out the sprites of a banner sliding
+// in or out that are past the screen's edge. Distances are compared as the
+// VDP places sprites: X modulo 512 (9 bits), Y modulo 1024. Where matches
+// share sprites the one with the most tiles present wins (then a whole
+// group over a partial one, then the pattern loaded first).
 //
 // The member sprites are then not drawn, and the image is, as one sprite in
-// the first member's place in the sprite list (in front of the sprites after
-// it, behind those before it), with the first member's priority bit and
-// palette line: indices 1-15 of that line, 0 transparent. It is placed at
-// the members' bounding box (align left, center or right when it is not as
-// wide; an offset moves it). A member whose table entry moves or changes
-// tiles during the picture brings the whole group's sprites back on the
-// lines drawn after; a change of palette line or priority does not (the
-// image follows the first member's).
+// the place in the sprite list of the first member present (in front of
+// the sprites after it, behind those before it), with that member's
+// priority bit and palette line: indices 1-15 of that line, 0 transparent.
+// It is placed at the members' bounding box (align left, center or right
+// when it is not as wide; an offset moves it), relative to that member, and
+// drawn clipped to the picture like any sprite. A member whose table entry
+// moves or changes tiles during the picture brings the whole group's
+// sprites back on the lines drawn after; a change of palette line or
+// priority does not (the image follows the member's).
 //
 // Output only: the status flags (sprite collision, overflow) still come
 // from the original sprites, and nothing here is read by the machine.
@@ -40,6 +46,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace chaotix {
@@ -62,7 +69,7 @@ public:
     struct Pattern {
         std::string name;
         std::vector<Member> members;   // the first is at 0,0 once added
-        int palette = -1;              // 0-3: matches only when the first member has that line
+        int palette = -1;              // 0-3: matches only when the first member present has that line
         Align align = Align::Left;
         int offset_x = 0, offset_y = 0;
         int width = 0, height = 0;     // the image
@@ -85,9 +92,10 @@ public:
 
     struct Hit {
         const Pattern* p;
-        uint8_t first;   // the first member's sprite table entry
+        uint8_t first;   // the sprite table entry of the first member present
         uint8_t place;   // its place in the sprite list: lower is in front
-        std::vector<uint8_t> links;  // every member's entry
+        int dx, dy;      // that member's offset from the pattern's first member
+        std::vector<uint8_t> links;  // every present member's entry
     };
     // The matches of this picture; empty without patterns.
     const std::vector<Hit>& hits() const { return hits_; }
@@ -124,10 +132,14 @@ public:
 private:
     bool member_matches(const Member& m, const Sprite& s, const uint64_t* slot_hash) const;
     void match(const Vdp& v, const std::vector<Sprite>& table, const uint64_t* slot_hash);
+    // Whether a member at screen pixels (x, y) would show nothing: wholly
+    // outside the picture.
+    static bool off_screen(const Vdp& v, const Member& m, int x, int y);
     void dump(const Vdp& v, const std::vector<Sprite>& table, const uint64_t* slot_hash);
 
     std::vector<Pattern> patterns_;
-    std::unordered_map<uint64_t, std::vector<int>> by_first_;  // first member's first tile -> patterns
+    // A member's first tile -> (pattern, member)
+    std::unordered_map<uint64_t, std::vector<std::pair<int, int>>> by_tile_;
     std::vector<Hit> hits_;
     std::array<int8_t, kMaxSprites> hit_of_{};
     std::array<std::array<uint16_t, 4>, kMaxSprites> saved_{};  // entries as matched

@@ -80,7 +80,11 @@ bool SpriteTextReplacer::add(Pattern p, std::string* error) {
     p.image_x = x0 + off + p.offset_x;
     p.image_y = y0 + p.offset_y;
     for (auto& i : p.indices) i &= 15;
-    by_first_[p.members[0].hashes[0]].push_back(int(patterns_.size()));
+    for (size_t i = 0; i < p.members.size(); ++i) {
+        auto& list = by_tile_[p.members[i].hashes[0]];
+        if (std::find(list.begin(), list.end(), std::make_pair(int(patterns_.size()), int(i))) == list.end())
+            list.emplace_back(int(patterns_.size()), int(i));
+    }
     patterns_.push_back(std::move(p));
     hits_.clear();  // their pointers may be stale
     hit_of_.fill(-1);
@@ -131,54 +135,82 @@ void SpriteTextReplacer::refresh(const Vdp& v, const uint64_t* slot_hash, bool d
     if (dumping) dump(v, table, slot_hash);
 }
 
+bool SpriteTextReplacer::off_screen(const Vdp& v, const Member& m, int x, int y) {
+    const int left = -v.shown_extra, right = v.width() + v.shown_extra;
+    const int top = 0, bottom = v.height() + v.shown_extra_bottom;
+    return x + m.w * 8 <= left || x >= right || y + m.h * 8 <= top || y >= bottom;
+}
+
 void SpriteTextReplacer::match(const Vdp& v, const std::vector<Sprite>& table, const uint64_t* slot_hash) {
     hits_.clear();
     hit_of_.fill(-1);
-    struct Cand { int pi; std::vector<int> sprites; };  // indices into `table`, member by member
+    // A candidate: per member, its sprite (an index into `table`) or -1
+    // when the member is left out, off screen; `ref` is the first present.
+    struct Cand { int pi, ref, tiles; bool whole; std::vector<int> sprites; };
     std::vector<Cand> cands;
     for (size_t si = 0; si < table.size(); ++si) {
         const Sprite& s = table[si];
-        const auto it = by_first_.find(tile_hash(s, 0, slot_hash));
-        if (it == by_first_.end()) continue;
-        for (int pi : it->second) {
+        const auto it = by_tile_.find(tile_hash(s, 0, slot_hash));
+        if (it == by_tile_.end()) continue;
+        for (const auto& [pi, mi] : it->second) {
             const Pattern& p = patterns_[size_t(pi)];
-            if (!member_matches(p.members[0], s, slot_hash)) continue;
+            const Member& ms = p.members[size_t(mi)];
+            if (!member_matches(ms, s, slot_hash)) continue;
             if (p.palette >= 0 && ((s.pat >> 13) & 3) != p.palette) continue;
-            Cand c{pi, {int(si)}};
-            for (size_t mi = 1; mi < p.members.size(); ++mi) {
-                const Member& m = p.members[mi];
+            Cand c{pi, mi, 0, true, std::vector<int>(p.members.size(), -1)};
+            c.sprites[size_t(mi)] = int(si);
+            bool ok = true;
+            for (size_t mj = 0; mj < p.members.size() && ok; ++mj) {
+                if (int(mj) == mi) continue;
+                const Member& m = p.members[mj];
+                // Where the VDP shows a sprite placed that far from s: X is
+                // 9 bits (screen -128 to 383), Y 10 bits.
+                const int x = ((s.x + 128 - ms.dx + m.dx) & 511) - 128;
+                const int y = ((s.y + 128 - ms.dy + m.dy) & 1023) - 128;
                 int found = -1;
                 for (size_t ti = 0; ti < table.size() && found < 0; ++ti) {
                     const Sprite& t = table[ti];
-                    if (t.x != s.x + m.dx || t.y != s.y + m.dy) continue;
+                    if (t.x != x || t.y != y) continue;
                     if (std::find(c.sprites.begin(), c.sprites.end(), int(ti)) != c.sprites.end()) continue;
                     if (member_matches(m, t, slot_hash)) found = int(ti);
                 }
-                if (found < 0) break;
-                c.sprites.push_back(found);
+                if (found >= 0) {
+                    // Found from the first member present, not from this one.
+                    ok = int(mj) > mi;
+                    c.sprites[mj] = found;
+                } else {
+                    ok = off_screen(v, m, x, y);
+                    c.whole = false;
+                }
             }
-            if (c.sprites.size() == p.members.size()) cands.push_back(std::move(c));
+            if (!ok) continue;
+            for (size_t mj = 0; mj < p.members.size(); ++mj)
+                if (c.sprites[mj] >= 0) c.tiles += p.members[mj].w * p.members[mj].h;
+            cands.push_back(std::move(c));
         }
     }
     if (cands.empty()) return;
-    // The most tiles first; ties in the order the patterns were loaded, then
-    // by the first member's place in the list.
+    // The most tiles present first, then whole groups; ties in the order the
+    // patterns were loaded, then by the first present member's place in
+    // the list.
     std::stable_sort(cands.begin(), cands.end(), [&](const Cand& a, const Cand& b) {
-        const int ta = patterns_[size_t(a.pi)].tiles, tb = patterns_[size_t(b.pi)].tiles;
-        if (ta != tb) return ta > tb;
+        if (a.tiles != b.tiles) return a.tiles > b.tiles;
+        if (a.whole != b.whole) return a.whole;
         if (a.pi != b.pi) return a.pi < b.pi;
-        return table[size_t(a.sprites[0])].place < table[size_t(b.sprites[0])].place;
+        return table[size_t(a.sprites[size_t(a.ref)])].place < table[size_t(b.sprites[size_t(b.ref)])].place;
     });
     const uint32_t sat = table_address(v);
     std::vector<bool> used(table.size(), false);
     for (const Cand& c : cands) {
         bool free = true;
-        for (int si : c.sprites) free = free && !used[size_t(si)];
+        for (int si : c.sprites) free = free && (si < 0 || !used[size_t(si)]);
         if (!free) continue;
         const int h = int(hits_.size());
-        Hit hit{&patterns_[size_t(c.pi)], uint8_t(table[size_t(c.sprites[0])].link),
-                uint8_t(table[size_t(c.sprites[0])].place), {}};
+        const Pattern& p = patterns_[size_t(c.pi)];
+        const Sprite& ref = table[size_t(c.sprites[size_t(c.ref)])];
+        Hit hit{&p, uint8_t(ref.link), uint8_t(ref.place), p.members[size_t(c.ref)].dx, p.members[size_t(c.ref)].dy, {}};
         for (int si : c.sprites) {
+            if (si < 0) continue;
             used[size_t(si)] = true;
             const int link = table[size_t(si)].link;
             hit.links.push_back(uint8_t(link));

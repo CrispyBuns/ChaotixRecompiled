@@ -192,6 +192,67 @@ TEST(text_replace, a_palette_or_priority_change_since_the_match_keeps_the_image)
     CHECK_EQ(render(v)[8], rgb(kGreenC));
 }
 
+TEST(text_replace, text_written_during_the_picture_is_replaced_from_the_line_it_shows_on) {
+    auto v = scene();
+    const uint32_t row = 0xC000 + uint32_t((kLine / 8) * kCells * 2);
+    word(v, row + 0, 0);
+    word(v, row + 2, 0);
+    add(v, pattern({tile_hash(v, 1), tile_hash(v, 2)}, 16, 3));
+    new_frame(v);  // the run is not there when the picture starts
+    CHECK_EQ(render(v, kLine - 8)[0], rgb(0));
+    word(v, row + 0, 1);
+    word(v, row + 2, 2);
+    const auto after = render(v);
+    CHECK_EQ(after[0], rgb(kBlueC));
+    CHECK_EQ(after[15], rgb(kBlueC));
+    CHECK_EQ(after[16], rgb(kRedC));
+}
+
+TEST(text_replace, a_run_cleared_and_rewritten_before_its_line_stays_replaced) {
+    // DATA LOAD's slot panel: its rows are cleared and written again while
+    // the picture is drawn, before the beam reaches them.
+    auto v = scene();
+    add(v, pattern({tile_hash(v, 1), tile_hash(v, 2)}, 16, 3));
+    new_frame(v);
+    const uint32_t row = 0xC000 + uint32_t((kLine / 8) * kCells * 2);
+    for (int c = 0; c < kCells; ++c) word(v, row + uint32_t(c) * 2, 0);
+    CHECK_EQ(render(v, kLine - 8)[0], rgb(0));  // a line above it
+    word(v, row + 0, 1);
+    word(v, row + 2, 2);
+    word(v, row + 4, 1);
+    const auto after = render(v);
+    CHECK_EQ(after[0], rgb(kBlueC));
+    CHECK_EQ(after[15], rgb(kBlueC));
+    CHECK_EQ(after[16], rgb(kRedC));
+    // Cleared while its row is drawn: the line shows what is there.
+    for (int c = 0; c < kCells; ++c) word(v, row + uint32_t(c) * 2, 0);
+    CHECK_EQ(render(v, kLine + 1)[0], rgb(0));
+    word(v, row + 0, 1);
+    word(v, row + 2, 2);
+    CHECK_EQ(render(v, kLine + 2)[0], rgb(kBlueC));
+}
+
+TEST(text_replace, a_taller_run_follows_its_rows_below_the_line) {
+    // Tiles 1 2 over 2 1: a change in the second row brings the tiles of
+    // the first back on the lines drawn after it.
+    auto v = scene();
+    const uint32_t row = 0xC000 + uint32_t((kLine / 8) * kCells * 2);
+    word(v, row + kCells * 2 + 0, 2);
+    word(v, row + kCells * 2 + 2, 1);
+    TextReplacer::Pattern p = pattern({tile_hash(v, 1), tile_hash(v, 2), tile_hash(v, 2), tile_hash(v, 1)}, 16, 3);
+    p.rows = 2;
+    p.cols = 2;
+    p.height = 16;
+    p.indices.assign(16 * 16, 3);
+    add(v, p);
+    new_frame(v);
+    CHECK_EQ(render(v)[0], rgb(kBlueC));
+    CHECK_EQ(render(v, kLine + 8)[0], rgb(kBlueC));
+    word(v, row + kCells * 2 + 2, 2);
+    CHECK_EQ(render(v, kLine + 1)[0], rgb(kRedC));
+    CHECK_EQ(render(v, kLine + 9)[0], rgb(kGreenC));
+}
+
 TEST(text_replace, the_window_plane_is_matched_too) {
     auto v = scene();
     v.reg[3] = 0x2C;   // window at B000

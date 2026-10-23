@@ -399,6 +399,10 @@ void Vdp::render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra) {
         }
     }
 
+    // Text replaced by tile sequence follows the name table as this line
+    // shows it (text_replace.h).
+    if (tiles && tiles->text.size()) tiles->text.update_line(*this, line, win_x1 > win_x0, tiles->slot_hashes());
+
     render_plane(*this, line, false, b, xs, xe, 0, 0);
     render_plane(*this, line, true, a, xs, xe, win_x0, win_x1);
     if (win_x1 > win_x0) render_window(*this, line, a, xs, win_x0, win_x1);
@@ -517,18 +521,19 @@ void Vdp::render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra) {
             if (link == 0 || link >= max_sprites) break;
         }
         if (st) {
-            // The images, over the sprites after their first member in the
-            // list and under those before it, at the first member's place
-            // with its palette line and priority as they are now.
+            // The images, over the sprites after their first present member
+            // in the list and under those before it, placed from that
+            // member with its palette line and priority as they are now,
+            // clipped to the line.
             for (size_t h = 0; h < st->hits().size(); ++h) {
                 if (!st_live[h]) continue;
                 const SpriteTextReplacer::Hit& hit = st->hits()[h];
                 const uint32_t e = sat + uint32_t(hit.first) * 8;
                 auto rw = [&](uint32_t o) { return uint16_t((vram[(e + o) & 0xFFFF] << 8) | vram[(e + o + 1) & 0xFFFF]); };
                 const SpriteTextReplacer::Pattern& p = *hit.p;
-                const int iy = line - ((rw(0) & 0x3FF) - 128 + p.image_y);
+                const int iy = line - ((rw(0) & 0x3FF) - 128 - hit.dy + p.image_y);
                 if (iy < 0 || iy >= p.height) continue;
-                const int x0 = (rw(6) & 0x1FF) - 128 + p.image_x;
+                const int x0 = (rw(6) & 0x1FF) - 128 - hit.dx + p.image_x;
                 const uint16_t pat = rw(4);
                 const uint8_t pal = uint8_t((pat >> 9) & 0x30), prio = uint8_t((pat >> 15) & 1);
                 const uint8_t* src = p.indices.data() + size_t(iy) * size_t(p.width);

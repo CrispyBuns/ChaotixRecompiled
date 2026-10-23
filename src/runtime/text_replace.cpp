@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 
 namespace chaotix {
 
@@ -82,6 +83,7 @@ bool TextReplacer::add(Pattern p, std::string* error) {
     by_first_[p.hashes[0]].push_back(int(patterns_.size()));
     patterns_.push_back(std::move(p));
     for (auto& pl : planes_) { pl.any = false; pl.hits.clear(); }  // their pointers may be stale
+    for (auto& sp : seen_planes_) sp.wanted = false;  // until the next refresh
     return true;
 }
 
@@ -95,18 +97,71 @@ void TextReplacer::refresh(const Vdp& v, const uint64_t* slot_hash, bool dumping
     if (dumping) dump(v, slot_hash);
 }
 
+void TextReplacer::update_line(const Vdp& v, int line, bool window, const uint64_t* slot_hash) {
+    if (patterns_.empty() || first_.empty()) return;
+    for (int pl = 0; pl < 3; ++pl) {
+        const Seen& S = seen_planes_[size_t(pl)];
+        if (!S.wanted || (pl == 2 && (!window || line < 0 || line >= 256))) continue;
+        const Geometry g = geometry(v, pl);
+        if (g.nt != S.nt || g.pw != S.pw || g.ph != S.ph) {
+            match(v, pl, slot_hash);
+            continue;
+        }
+        // The rows this line shows (one, or one per 16-pixel column with
+        // per-column V-scroll, as render_plane reads them), and the rows a
+        // pattern on them could span.
+        uint64_t check[2] = {};  // up to 128 rows
+        auto show = [&](int row) {
+            for (int k = -(S.rows - 1); k <= S.rows - 1; ++k) {
+                const int r = ((row + k) % g.ph + g.ph) % g.ph;
+                check[r >> 6] |= uint64_t(1) << (r & 63);
+            }
+        };
+        if (pl == 2) show(line >> 3);
+        else if (v.reg[11] & 4) {
+            for (int col = 0; col < 20; ++col) show(((line + v.vsram[col * 2 + pl]) & (g.ph * 8 - 1)) >> 3);
+        } else {
+            show(((line + v.vsram[pl]) & (g.ph * 8 - 1)) >> 3);
+        }
+        const size_t row_bytes = size_t(g.pw) * 2;
+        bool changed = false;
+        for (int r = 0; r < g.ph && !changed; ++r) {
+            if (!((check[r >> 6] >> (r & 63)) & 1)) continue;
+            const size_t at = g.nt + size_t(r) * row_bytes;
+            const uint8_t* old = S.bytes.data() + size_t(r) * row_bytes;
+            if (at + row_bytes <= 0x10000) changed = std::memcmp(v.vram + at, old, row_bytes) != 0;
+            else
+                for (size_t i = 0; i < row_bytes && !changed; ++i) changed = v.vram[(at + i) & 0xFFFF] != old[i];
+        }
+        if (changed) match(v, pl, slot_hash);
+    }
+}
+
 void TextReplacer::match(const Vdp& v, int pl, const uint64_t* slot_hash) {
     Plane& P = planes_[size_t(pl)];
     P.any = false;
     P.hits.clear();
     const uint8_t bit = uint8_t(1 << pl);
-    bool wanted = false;
-    for (const auto& p : patterns_) wanted |= (p.planes & bit) != 0;
-    if (!wanted) return;
+    Seen& S = seen_planes_[size_t(pl)];
+    S.wanted = false;
+    S.rows = 1;
+    for (const auto& p : patterns_)
+        if (p.planes & bit) {
+            S.wanted = true;
+            S.rows = std::max(S.rows, p.rows);
+        }
+    if (!S.wanted) return;
     const Geometry g = geometry(v, pl);
     const int n = g.pw * g.ph;
     P.pw = g.pw;
     P.ph = g.ph;
+    // What was matched, for update_line (a name table past the end of VRAM
+    // wraps, as entry_at reads it).
+    S.nt = g.nt;
+    S.pw = g.pw;
+    S.ph = g.ph;
+    S.bytes.resize(size_t(n) * 2);
+    for (size_t i = 0; i < S.bytes.size(); ++i) S.bytes[i] = v.vram[(g.nt + i) & 0xFFFF];
 
     struct Cand { int pi, cx, cy; };
     std::vector<Cand> cands;

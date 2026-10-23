@@ -360,6 +360,9 @@ void Machine::render_output_line(int src_line, int dst_row) {
     vdp.radial_len = radial_len;
     vdp.radial_cx2 = kNativeWidth;
     vdp.radial_cy2 = kActiveLines;
+    vdp.shown_extra = wide_active ? extra : 0;
+    vdp.shown_extra_bottom =
+        wide_active && !wide_special ? std::clamp(wide_extra_bottom, 0, patches::kMaxWideExtraBottom) : 0;
     vdp.render_line(src_line, md, bg, extra);
     uint32_t* row = framebuffer + dst_row * kScreenWidth;
     render_line32x(src_line, row, extra, wide_active);

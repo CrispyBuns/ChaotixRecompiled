@@ -1,8 +1,10 @@
 // Mega Drive text replaced by sprite: a sprite, or a group of sprites at
 // fixed distances, found in the sprite table is drawn from the modder's
 // image instead, only there; flips must match; the group with the most tiles
-// wins; the image keeps its first member's place among the sprites; the
-// status flags still follow the original sprites.
+// wins; a group partly off screen matches from the sprites the game lists;
+// distances wrap as the VDP places sprites; the image keeps its first
+// member's place among the sprites; the status flags still follow the
+// original sprites.
 #include "runtime/sprite_text.h"
 #include "runtime/tile_replace.h"
 #include "runtime/vdp.h"
@@ -63,10 +65,12 @@ Vdp scene() {
     return v;
 }
 
-std::array<uint32_t, Vdp::kMaxWidth> render(Vdp& v, int line) {
+// A line of the native 320 pixels and `extra` more each side: pixel x is
+// at [x + extra].
+std::array<uint32_t, Vdp::kMaxWidth> render(Vdp& v, int line, int extra = 0) {
     std::array<uint32_t, Vdp::kMaxWidth> out{};
     uint8_t backdrop[Vdp::kMaxWidth]{};
-    v.render_line(line, out.data(), backdrop, 0);
+    v.render_line(line, out.data(), backdrop, extra);
     return out;
 }
 
@@ -270,6 +274,92 @@ TEST(sprite_text, a_required_palette_line) {
     word(v, kSat + 4, 1 | 0x2000);
     new_frame(v);
     CHECK_EQ(render(v, 40)[16], rgb(kWhiteC));
+}
+
+// Three 1x1 sprites 16 pixels apart, tiles 1 2 3; the image 40x8.
+SpriteTextReplacer::Pattern banner(const Vdp& v, uint8_t index) {
+    return pattern({member(0, 0, 1, 1, {tile_hash(v, 1)}), member(16, 0, 1, 1, {tile_hash(v, 2)}),
+                    member(32, 0, 1, 1, {tile_hash(v, 3)})},
+                   40, 8, index);
+}
+
+TEST(sprite_text, a_group_matches_without_the_members_that_would_be_off_screen) {
+    // A banner sliding in from the left: the game leaves out of the list
+    // its first sprite, which would be at x -12, wholly off screen.
+    auto v = scene();
+    sprite(v, 0, 4, 40, 1, 1, 2, 1);
+    sprite(v, 1, 20, 40, 1, 1, 3, 0);
+    add(v, banner(v, 3));
+    new_frame(v);
+    const auto a = render(v, 40);
+    for (int x = 0; x < 28; ++x) CHECK_EQ(a[size_t(x)], rgb(kBlueC));  // the image, clipped at the edge
+    CHECK_EQ(a[28], rgb(0));
+    CHECK_EQ(v.tiles->sprite_text.hits().size(), size_t(1));
+    // Sliding out on the right: the last sprite, at x 324, is left out.
+    auto w = scene();
+    sprite(w, 0, 292, 40, 1, 1, 1, 1);
+    sprite(w, 1, 308, 40, 1, 1, 2, 0);
+    add(w, banner(w, 3));
+    new_frame(w);
+    const auto b = render(w, 40);
+    CHECK_EQ(b[291], rgb(0));
+    for (int x = 292; x < 320; ++x) CHECK_EQ(b[size_t(x)], rgb(kBlueC));
+}
+
+TEST(sprite_text, a_member_missing_on_screen_breaks_the_group) {
+    auto v = scene();
+    // The first sprite would be at x 4, on screen: not a match.
+    sprite(v, 0, 20, 40, 1, 1, 2, 1);
+    sprite(v, 1, 36, 40, 1, 1, 3, 0);
+    add(v, banner(v, 3));
+    new_frame(v);
+    const auto a = render(v, 40);
+    CHECK_EQ(a[4], rgb(0));
+    CHECK_EQ(a[20], rgb(kGreenC));
+    CHECK(v.tiles->sprite_text.hits().empty());
+    // Nor where the widescreen margins show it (x -12, margins 16 wide).
+    auto w = scene();
+    w.shown_extra = 16;
+    sprite(w, 0, 4, 40, 1, 1, 2, 1);
+    sprite(w, 1, 20, 40, 1, 1, 3, 0);
+    add(w, banner(w, 3));
+    new_frame(w);
+    CHECK_EQ(render(w, 40)[4], rgb(kGreenC));
+    // Beyond narrower margins (4 pixels) it may be missing.
+    w.shown_extra = 4;
+    new_frame(w);
+    CHECK_EQ(render(w, 40)[4], rgb(kBlueC));
+}
+
+TEST(sprite_text, a_whole_group_beats_a_partial_one_with_as_many_tiles) {
+    auto v = scene();
+    sprite(v, 0, 4, 40, 1, 1, 2, 1);
+    sprite(v, 1, 20, 40, 1, 1, 3, 0);
+    // The banner, two of its three sprites present, against a pattern of
+    // just those two (index 2: green), and one of just the first (index 1).
+    add(v, pattern({member(0, 0, 1, 1, {tile_hash(v, 2)})}, 8, 8, 1));
+    add(v, banner(v, 3));
+    new_frame(v);
+    CHECK_EQ(render(v, 40)[4], rgb(kBlueC));  // the most tiles present
+    add(v, pattern({member(0, 0, 1, 1, {tile_hash(v, 2)}), member(16, 0, 1, 1, {tile_hash(v, 3)})}, 24, 8, 2));
+    new_frame(v);
+    CHECK_EQ(render(v, 40)[4], rgb(kGreenC));  // as many, and whole
+}
+
+TEST(sprite_text, distances_wrap_as_the_vdp_places_sprites) {
+    // The VDP's X is 9 bits: a member 100 pixels right of a sprite at x 300
+    // is at 400 - 512 = -112, which a widescreen line shows.
+    auto v = scene();
+    sprite(v, 0, 300, 40, 1, 1, 1, 1);
+    sprite(v, 1, -112, 40, 1, 1, 2, 0);
+    CHECK_EQ(render(v, 40, 128)[size_t(-112 + 128)], rgb(kGreenC));
+    add(v, pattern({member(0, 0, 1, 1, {tile_hash(v, 1)}), member(100, 0, 1, 1, {tile_hash(v, 2)})}, 8, 8, 3));
+    new_frame(v);
+    CHECK_EQ(v.tiles->sprite_text.hits().size(), size_t(1));
+    if (v.tiles->sprite_text.hits().size() == 1) CHECK_EQ(v.tiles->sprite_text.hits()[0].links.size(), size_t(2));
+    const auto a = render(v, 40, 128);
+    CHECK_EQ(a[size_t(-112 + 128)], rgb(0));  // a member: not drawn
+    CHECK_EQ(a[size_t(300 + 128)], rgb(kBlueC));
 }
 
 TEST(sprite_text, malformed_patterns_are_refused) {

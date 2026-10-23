@@ -9,7 +9,14 @@
 // frame, before the frame is drawn, each plane's nametable (A, B, window) is
 // searched for the patterns, in nametable coordinates: a match is a place in
 // the plane, so it scrolls with the plane, per line or per column, as the
-// tiles do. The longest pattern wins where matches overlap. The cells of a
+// tiles do. The longest pattern wins where matches overlap. While the picture
+// is drawn, the matches follow the name table as it is when each line is
+// drawn: before a line, the name table rows it shows (and the rows a pattern
+// there could span) are compared with the ones last matched, and the plane
+// is matched again if they differ. Text the game writes during the picture
+// is replaced from the line it appears on, and rows the game clears and
+// rewrites before the beam reaches them (DATA LOAD's slot panel) stay
+// replaced. The cells of a
 // match are then drawn from the pattern's image instead of from their tiles
 // (single-tile replacements do not apply to them); an image wider than the
 // run also covers the plane's pixels beside it, where the image is not 0.
@@ -17,10 +24,9 @@
 // Colours are palette indices, as in md_ tiles: 1-15 of the palette line the
 // run's first tile is drawn with, 0 transparent, so fades and palette
 // changes (a highlighted menu entry) still apply. The priority bit is the
-// first tile's too. Both are read as each line is drawn: a run whose entries
-// change only their palette line or priority during the picture (DATA LOAD
-// dims a slot that way) stays replaced, in the new colours; a cell whose
-// tile or flips change shows its tile.
+// first tile's too. Both are read as each line is drawn, so a run whose
+// entries change only their palette line or priority during the picture
+// (DATA LOAD dims a slot that way) stays replaced, in the new colours.
 //
 // Output only, like the tile replacer: nothing here is read by the machine.
 //
@@ -63,6 +69,12 @@ public:
     // Once a frame, before it is drawn, after the tile hashes are refreshed:
     // finds the matches, and with `dumping` lists the runs on screen.
     void refresh(const Vdp& v, const uint64_t* slot_hash, bool dumping);
+    // Before each line is drawn (after refresh on line 0): matches a plane
+    // again where the name table rows the line shows, or rows a pattern
+    // there could span, have changed since it was last matched. `window`:
+    // the window is shown on this line. Cheap when nothing changed (a
+    // comparison of a few rows); does nothing without patterns.
+    void update_line(const Vdp& v, int line, bool window, const uint64_t* slot_hash);
 
     // A match, in the plane's pixel coordinates.
     struct Hit {
@@ -138,6 +150,16 @@ private:
     std::vector<Pattern> patterns_;
     std::unordered_map<uint64_t, std::vector<int>> by_first_;  // first cell's hash -> patterns
     std::array<Plane, 3> planes_;
+    // Per plane, the name table as last matched, to find the rows that
+    // changed since.
+    struct Seen {
+        bool wanted = false;           // a pattern can match on this plane
+        int rows = 1;                  // the tallest such pattern, in rows
+        uint32_t nt = 0;
+        int pw = 0, ph = 0;
+        std::vector<uint8_t> bytes;    // pw * ph entries, as in VRAM
+    };
+    std::array<Seen, 3> seen_planes_;
     std::vector<uint8_t> first_;      // per VRAM slot: its hash starts a pattern
     uint64_t frames_ = 0, last_dump_ = 0;
     bool dumped_once_ = false;
