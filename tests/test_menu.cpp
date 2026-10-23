@@ -842,6 +842,91 @@ TEST(menu, touch_opacity_is_set_and_kept) {
     std::remove(path.c_str());
 }
 
+TEST(menu, fast_forward_settings_are_set_and_kept) {
+    // Issue #45: the key and pad button on the CONTROLS page, the on-screen
+    // button, HOLD / TOGGLE and the speed under INPUT; all in the settings.
+    Config cfg;
+    cfg.set_defaults();
+    CHECK_STR(cfg.ff_key, "Tab");
+    CHECK_STR(cfg.ff_button, "righttrigger");
+    CHECK(!cfg.touch_ff);
+    CHECK(cfg.ff_mode == FastForwardMode::Hold);
+    CHECK(cfg.ff_speed == FastForwardSpeed::Max);
+
+    Menu m;
+    m.bind(cfg);
+    m.toggle();
+    CHECK(select_row(m, "CONTROLS"));
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK(select_row(m, "FAST FORWARD KEY"));
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK(m.on_key(SDLK_GRAVE));
+    CHECK_STR(cfg.ff_key, SDL_GetScancodeName(SDL_SCANCODE_GRAVE));
+    // Escape gives up on a capture without changing anything.
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK(m.on_key(SDLK_ESCAPE));
+    CHECK_STR(cfg.ff_key, SDL_GetScancodeName(SDL_SCANCODE_GRAVE));
+    CHECK_STR(m.page_name(), "controls");
+    // The pad button never lands on the menu button nor on one the emulated
+    // pad uses.
+    CHECK(select_row(m, "FAST FORWARD PAD"));
+    for (int i = 0; i < 10; ++i) {
+        m.on_key(SDLK_RIGHT);
+        CHECK(cfg.ff_button != cfg.menu_button);
+        for (const auto& [button, bound] : cfg.pads) CHECK(bound != cfg.ff_button);
+    }
+    cfg.ff_button = "rightstick";
+    // And the menu button steps over the fast-forward one.
+    CHECK(select_row(m, "MENU BUTTON"));
+    CHECK(m.on_key(SDLK_RIGHT));
+    CHECK(cfg.menu_button != cfg.ff_button);
+    m.close();
+
+    open_category(m, "INPUT");
+    CHECK(select_row(m, "TOUCH FAST FORWARD"));
+    CHECK(m.on_key(SDLK_RIGHT));
+    CHECK(cfg.touch_ff);
+    CHECK(select_row(m, "FAST FORWARD"));
+    CHECK(m.on_key(SDLK_RIGHT));
+    CHECK(cfg.ff_mode == FastForwardMode::Toggle);
+    CHECK(select_row(m, "FAST FORWARD SPEED"));
+    CHECK(m.on_key(SDLK_RIGHT));
+    CHECK(cfg.ff_speed == FastForwardSpeed::X2);  // MAX wraps round to 2X
+    CHECK(m.on_key(SDLK_RIGHT));
+    CHECK(cfg.ff_speed == FastForwardSpeed::X4);
+
+    const std::string path = "fast_forward_test.ini";
+    CHECK(cfg.save(path));
+    Config back;
+    CHECK(back.load(path));
+    CHECK_STR(back.ff_key, cfg.ff_key);
+    CHECK_STR(back.ff_button, "rightstick");
+    CHECK(back.touch_ff);
+    CHECK(back.ff_mode == FastForwardMode::Toggle);
+    CHECK(back.ff_speed == FastForwardSpeed::X4);
+    cfg.ff_speed = FastForwardSpeed::X2;
+    cfg.ff_mode = FastForwardMode::Hold;
+    CHECK(cfg.save(path));
+    CHECK(back.load(path));
+    CHECK(back.ff_speed == FastForwardSpeed::X2);
+    CHECK(back.ff_mode == FastForwardMode::Hold);
+    std::remove(path.c_str());
+
+    // A settings file from before fast-forward had settings keeps Tab, held,
+    // at full speed, and no on-screen button.
+    if (FILE* f = std::fopen(path.c_str(), "w")) {
+        std::fputs("[Input]\nMenuButton = leftstick\n", f);
+        std::fclose(f);
+    }
+    CHECK(back.load(path));
+    CHECK_STR(back.ff_key, "Tab");
+    CHECK_STR(back.ff_button, "righttrigger");
+    CHECK(back.ff_mode == FastForwardMode::Hold);
+    CHECK(back.ff_speed == FastForwardSpeed::Max);
+    CHECK(!back.touch_ff);
+    std::remove(path.c_str());
+}
+
 TEST(menu, the_menus_look_is_an_extras_setting_and_is_kept) {
     // Issue #8: the game's font and the zones behind the menu, on by
     // default; PIXEL and PLAIN give the earlier look back.

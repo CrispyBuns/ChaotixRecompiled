@@ -199,6 +199,24 @@ const MenuButtonChoice kMenuButtons[] = {
 };
 constexpr int kMenuButtonCount = int(sizeof kMenuButtons / sizeof kMenuButtons[0]);
 
+// Fast-forward on a pad (issue #45): the same spare buttons, and the triggers,
+// which the emulated pad does not use either (SDL calls them axes; the
+// frontend reads them as pressed past half way).
+const MenuButtonChoice kFastForwardButtons[] = {
+    {"righttrigger", "RIGHT TRIGGER"},
+    {"lefttrigger", "LEFT TRIGGER"},
+    {"rightstick", "RIGHT STICK CLICK"},
+    {"leftstick", "LEFT STICK CLICK"},
+    {"guide", "GUIDE / HOME / PS"},
+    {"touchpad", "TOUCHPAD CLICK"},
+    {"misc1", "SHARE / CAPTURE"},
+    {"none", "NONE"},
+};
+constexpr int kFastForwardButtonCount = int(sizeof kFastForwardButtons / sizeof kFastForwardButtons[0]);
+// What awaiting_ holds while the fast-forward key is being captured; the key
+// page's captures are Mega Drive button names, which this is not.
+const char kFastForwardCapture[] = "fast forward";
+
 std::string upper(std::string v) {
     for (char& c : v) c = char(std::toupper((unsigned char)c));
     return v;
@@ -265,8 +283,34 @@ void Menu::build_controls() {
                           int i = 0;
                           for (int k = 0; k < kMenuButtonCount; ++k)
                               if (c->menu_button == kMenuButtons[k].name) i = k;
-                          i = (i + step + kMenuButtonCount) % kMenuButtonCount;
+                          // Not the fast-forward button: one button, one job.
+                          do i = (i + step + kMenuButtonCount) % kMenuButtonCount;
+                          while (c->ff_button == kMenuButtons[i].name);
                           c->menu_button = kMenuButtons[i].name;
+                      }});
+    // Fast-forward (issue #45): Tab and the right trigger to begin with.
+    // How it behaves (held or toggled, how fast) is under OPTIONS > INPUT.
+    items_.push_back({"FAST FORWARD KEY",
+                      [this, c] {
+                          if (awaiting_ == kFastForwardCapture) return std::string("PRESS A KEY");
+                          return c->ff_key.empty() ? std::string("-") : upper(c->ff_key);
+                      },
+                      [this](int step) { if (step == 0) awaiting_ = kFastForwardCapture; },
+                      {}, /*read_only=*/false, /*pressed=*/true});
+    items_.push_back({"FAST FORWARD PAD",
+                      [c] {
+                          for (const MenuButtonChoice& b : kFastForwardButtons)
+                              if (c->ff_button == b.name) return std::string(b.label);
+                          return upper(c->ff_button);
+                      },
+                      [c](int step) {
+                          if (!step) return;
+                          int i = 0;
+                          for (int k = 0; k < kFastForwardButtonCount; ++k)
+                              if (c->ff_button == kFastForwardButtons[k].name) i = k;
+                          do i = (i + step + kFastForwardButtonCount) % kFastForwardButtonCount;
+                          while (c->menu_button == kFastForwardButtons[i].name);
+                          c->ff_button = kFastForwardButtons[i].name;
                       }});
     items_.push_back({"BACK", {}, [this](int) { const Page back = return_to_; set_page(back); }});
 }
@@ -470,6 +514,22 @@ void Menu::build_input() {
                       [c] { return std::string(c->touch_stick ? "JOYSTICK" : "D-PAD"); },
                       [c](int s) { if (s) c->touch_stick = !c->touch_stick; },
                       "the on-screen directions"});
+    // Issue #45. The keys for it are on the CONTROLS page.
+    items_.push_back({"TOUCH FAST FORWARD",
+                      [c] { return on_off(c->touch_ff); },
+                      [c](int s) { if (s) c->touch_ff = !c->touch_ff; },
+                      "an on-screen button for it"});
+    items_.push_back({"FAST FORWARD",
+                      [c] { return std::string(c->ff_mode == FastForwardMode::Toggle ? "TOGGLE" : "HOLD"); },
+                      [c](int s) { if (s) cycle(c->ff_mode, 2, s); },
+                      "not in TIME ATTACK"});
+    items_.push_back({"FAST FORWARD SPEED",
+                      [c] {
+                          return std::string(c->ff_speed == FastForwardSpeed::X2   ? "2X"
+                                             : c->ff_speed == FastForwardSpeed::X4 ? "4X"
+                                                                                   : "MAX");
+                      },
+                      [c](int s) { if (s) cycle(c->ff_speed, 3, s); }});
     items_.push_back({"6-BUTTON PAD",
                       [c] { return on_off(c->six_button); },
                       [c](int s) { if (s) c->six_button = !c->six_button; }});
@@ -606,7 +666,13 @@ bool Menu::on_key(SDL_Keycode key) {
         // Capturing a binding. Escape abandons it; on a gamepad page a key is
         // simply the wrong kind of answer and is ignored.
         if (key == SDLK_ESCAPE) awaiting_.clear();
-        else if (!keys_pad_ && cfg_) {
+        else if (awaiting_ == kFastForwardCapture) {
+            const char* name = SDL_GetScancodeName(SDL_GetScancodeFromKey(key, nullptr));
+            if (cfg_ && name && *name) {
+                cfg_->ff_key = name;
+                awaiting_.clear();
+            }
+        } else if (!keys_pad_ && cfg_) {
             const SDL_Scancode sc = SDL_GetScancodeFromKey(key, nullptr);
             const char* name = SDL_GetScancodeName(sc);
             if (name && *name) {
@@ -647,7 +713,10 @@ bool Menu::on_pad(Uint8 button) {
     if (!open()) return false;
     if (!awaiting_.empty()) {
         // The mirror of the keyboard case: only a gamepad page takes a button.
-        if (keys_pad_ && cfg_) {
+        // The fast-forward key wants a key; the pad's back button gives up.
+        if (awaiting_ == kFastForwardCapture) {
+            if (button == SDL_GAMEPAD_BUTTON_EAST) awaiting_.clear();
+        } else if (keys_pad_ && cfg_) {
             const char* name = SDL_GetGamepadStringForButton(SDL_GamepadButton(button));
             if (name && *name) {
                 auto& binds = keys_player_ == 0 ? cfg_->pads : cfg_->pads2;

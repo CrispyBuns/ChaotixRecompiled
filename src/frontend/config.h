@@ -1,6 +1,7 @@
 // User settings (Config/chaotix.ini). Plain "key = value" lines grouped in
 // [Sections]; unknown keys are preserved on save.
 #pragma once
+#include "frontend/fast_forward.h"
 #include "renderer/viewport.h"
 #include <map>
 #include <set>
@@ -63,6 +64,15 @@ struct Config {
     // buttons the emulated 6-button pad does not use are offered, so binding
     // one never costs the game a button. SDL gamepad button name.
     std::string menu_button = "leftstick";
+    // Fast-forward (issue #45): the key (SDL key name), the gamepad button
+    // (SDL gamepad button name, or "lefttrigger" / "righttrigger", or "none"),
+    // an on-screen button (off by default), held or toggled, and how fast.
+    // MAX is what fast-forward always did, so it stays the default.
+    std::string ff_key = "Tab";
+    std::string ff_button = "righttrigger";
+    bool touch_ff = false;
+    FastForwardMode ff_mode = FastForwardMode::Hold;
+    FastForwardSpeed ff_speed = FastForwardSpeed::Max;
     // Mega Drive button name -> what produces it, one set per player so two
     // people can share a keyboard or two controllers behave differently.
     // keys*: SDL key names. pads*: SDL gamepad button names.

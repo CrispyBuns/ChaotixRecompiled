@@ -6,6 +6,10 @@
 
 namespace chaotix {
 
+// Not a Mega Drive button: the on-screen fast-forward button (issue #45). The
+// platform layer takes it out before the pad reaches the game.
+constexpr uint16_t TOUCH_FAST_FORWARD = 1 << 15;
+
 struct TouchButton {
     uint16_t mask;       // PAD_* bits produced while held
     float cx, cy, r;     // centre and radius in output pixels
@@ -20,8 +24,10 @@ public:
     // sonic_cd, the layout of Sonic CD's 2013 mobile version (issue #34): the
     // directions and one large jump button, with HOLD (B) and CALL (A) small
     // above it -- the only buttons this game uses -- and the whole lower
-    // right of the screen jumping where nothing else is.
-    void layout(int w, int h, bool stick = false, bool sonic_cd = false);
+    // right of the screen jumping where nothing else is. With fast_forward, a
+    // small fast-forward button (TOUCH_FAST_FORWARD) in the top-left corner,
+    // which both layouts leave empty (issue #45).
+    void layout(int w, int h, bool stick = false, bool sonic_cd = false, bool fast_forward = false);
     // Buttons pressed by a touch at (x, y) in output pixels.
     uint16_t hit(float x, float y) const;
     // A finger put down (down) or moved, by its id; returns what it presses.
