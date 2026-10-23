@@ -365,7 +365,7 @@ int main(int argc, char** argv) {
     std::string achievements_file;  // --achievements FILE: report unlocks
     uint64_t min_centre_frames = 0;  // fail if fewer frames could be compared
     std::string wav_path;
-    struct Poke { uint64_t frame; uint32_t addr; uint8_t value; };
+    struct Poke { uint64_t frame; uint32_t addr; uint8_t value; bool sdram = false, fb = false; };
     std::vector<Poke> pokes;
     struct Peek { uint64_t every; uint32_t addr; uint32_t bytes; };
     std::vector<Peek> peeks;
@@ -562,6 +562,27 @@ int main(int argc, char** argv) {
             pokes.push_back({std::strtoull(parts[0].c_str(), nullptr, 10),
                              uint32_t(std::strtoul(parts[1].c_str(), nullptr, 16) & 0xFFFF),
                              uint8_t(std::strtoul(parts[2].c_str(), nullptr, 16))});
+        }
+        else if (a == "--poke-sdram") {
+            // FRAME:OFFSET:BYTE, the same for an SH-2 SDRAM byte (the special
+            // stage keeps its rings and its goal there).
+            auto parts = split(next(), ':');
+            if (parts.size() < 3) { std::fprintf(stderr, "bad --poke-sdram\n"); return 2; }
+            pokes.push_back({std::strtoull(parts[0].c_str(), nullptr, 10),
+                             uint32_t(std::strtoul(parts[1].c_str(), nullptr, 16) & 0x3FFFF),
+                             uint8_t(std::strtoul(parts[2].c_str(), nullptr, 16)), true});
+        }
+        else if (a == "--poke-fb") {
+            // FROM:TO:OFFSET:BYTE, a byte of both 32X frame buffers set before
+            // every frame from FROM to TO: the special stage's result at $1FF
+            // (1: cleared), which the SH-2 stores when the goal is reached
+            // ($060074BA) and the 68K reads after the stage.
+            auto parts = split(next(), ':');
+            if (parts.size() < 4) { std::fprintf(stderr, "bad --poke-fb\n"); return 2; }
+            const uint64_t from = std::strtoull(parts[0].c_str(), nullptr, 10), to = std::strtoull(parts[1].c_str(), nullptr, 10);
+            for (uint64_t fr = from; fr <= to; ++fr)
+                pokes.push_back({fr, uint32_t(std::strtoul(parts[2].c_str(), nullptr, 16) & 0x1FFFF),
+                                 uint8_t(std::strtoul(parts[3].c_str(), nullptr, 16)), false, true});
         }
         else if (a == "--replay-input") {
             const std::string path = next();
@@ -931,8 +952,11 @@ int main(int argc, char** argv) {
         g_trace_on = g_trace && f >= trace_from && f < trace_to;
         for (const Poke& p : pokes)
             if (p.frame == f) {
-                m->wram[p.addr] = p.value;
-                if (ref) ref->wram[p.addr] = p.value;
+                for (Machine* x : {m.get(), ref.get(), nat.get()}) {
+                    if (!x) continue;
+                    if (p.fb) x->mars.fb[0][p.addr] = x->mars.fb[1][p.addr] = p.value;
+                    else (p.sdram ? x->sdram : x->wram)[p.addr] = p.value;
+                }
             }
         cheats::apply(*m, cheat_writes);
         if (ref) cheats::apply(*ref, cheat_writes);
@@ -1066,11 +1090,15 @@ int main(int argc, char** argv) {
                 // and a clipped polygon's edge can land a pixel apart, so
                 // there a frame may differ along polygon edges (measured: at
                 // most 1.8% of the picture) but not in what is drawn.
+                // The bonus stage and the results screen are drawn by the
+                // same code with the screen's rectangle (issues #38, #39).
                 const bool special = m->wide_special;
-                const int x0 = special ? patches::kSpecialRect[0] : 0;
-                const int x1 = special ? patches::kSpecialRect[1] + 1 : nat->fb_width;
-                const int y0 = special ? patches::kSpecialRect[2] : 0;
-                const int y1 = special ? patches::kSpecialRect[3] + 1 : nat->fb_height;
+                const int16_t* rect = patches::PolyScene(m->poly_scene) == patches::PolyScene::Stage
+                                          ? patches::kSpecialRect : patches::kFullRect;
+                const int x0 = special ? rect[0] : 0;
+                const int x1 = special ? rect[1] + 1 : nat->fb_width;
+                const int y0 = special ? rect[2] : 0;
+                const int y1 = special ? rect[3] + 1 : nat->fb_height;
                 const int allowed = special ? (x1 - x0) * (y1 - y0) / 40 : 0;
                 int differ = 0, dx = -1, dy = -1;
                 for (int y = y0; y < y1; ++y)

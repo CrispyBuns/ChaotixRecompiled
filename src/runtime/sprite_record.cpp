@@ -299,7 +299,7 @@ void SpriteRecorder::fb_fill(const Machine& m, uint32_t addr, uint32_t words, ui
     if (!track_writes) return;
     uint8_t* own = owner_[b].data();
     auto other = [own](uint32_t o) { own[o & 0x1FFFF] = uint8_t((own[o & 0x1FFFF] & kSpriteEver) | kOther); };
-    if (m.wide_special && (addr & 0xFF) == patches::kSpecialClearStart && words == patches::kSpecialClearLen + 1u && data == 0) {
+    if (patches::is_widened_clear(m, addr, words, data)) {
         const uint32_t line = (addr & 0xFF00) * 2u;
         for (int x = -patches::kMaxWideExtra; x < kNativeWidth + patches::kMaxWideExtra; ++x) other(line + uint32_t(x));
         return;

@@ -2,6 +2,8 @@
 #include "runtime/patches.h"
 #include "runtime/system.h"
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <iterator>
 
 namespace chaotix::patches {
@@ -181,10 +183,21 @@ void write_special_rect(Machine& m, int16_t left, int16_t right) {
     p[3] = uint8_t(right);
 }
 
-// Our widened rectangle is still in place: the stage has not set another.
-bool special_rect_is_ours(const Machine& m) {
-    return m.special_rect_overridden && special_rect(m, 0) == 0 && special_rect(m, 1) >= 319 &&
-           special_rect(m, 2) == kSpecialRect[2] && special_rect(m, 3) == kSpecialRect[3];
+// The rectangle the widened scene had before (the stage's, or the screen's).
+const int16_t* native_rect(PolyScene k) { return k == PolyScene::Stage ? kSpecialRect : kFullRect; }
+
+// Our widened rectangle for a scene of this kind is still in place: the game
+// has not set another.
+bool special_rect_is_ours(const Machine& m, PolyScene k) {
+    const int16_t* r = native_rect(k);
+    return m.special_rect_overridden && PolyScene(m.poly_scene) == k && special_rect(m, 0) == 0 &&
+           special_rect(m, 1) >= 319 && special_rect(m, 2) == r[2] && special_rect(m, 3) == r[3];
+}
+
+bool rect_is(const Machine& m, const int16_t* r) {
+    for (int i = 0; i < 4; ++i)
+        if (special_rect(m, i) != r[i]) return false;
+    return true;
 }
 
 uint16_t sdram16(const Machine& m, uint32_t off) { return uint16_t((m.sdram[off] << 8) | m.sdram[off + 1]); }
@@ -219,6 +232,15 @@ void set_special_projection(Machine& m, int shift) {
 
 } // namespace
 
+// Puts the bonus stage's polygon centre at X 160 + shift (kBonusCentreSdram).
+static void set_bonus_centre(Machine& m, int shift) {
+    const uint16_t mov = uint16_t(0xEA00 | uint8_t(kBonusCentre + shift));
+    const uint16_t w = sdram16(m, kBonusCentreSdram);
+    if ((w & 0xFF00) != 0xEA00 || sdram16(m, kBonusCentreSdram + 2) != kBonusCentreNext || w == mov) return;
+    m.sdram[kBonusCentreSdram] = uint8_t(mov >> 8);
+    m.sdram[kBonusCentreSdram + 1] = uint8_t(mov);
+}
+
 // Puts the HUD's base X at kHudX - shift (see kHudBaseX).
 void set_hud_shift(Machine& m, int shift) {
     const uint16_t mov = uint16_t(0xE100 | uint8_t(int8_t(kHudX - shift)));
@@ -232,10 +254,180 @@ void set_hud_shift(Machine& m, int shift) {
 
 bool special_stage_active(const Machine& m) {
     if (!special_projection_loaded(m)) return false;
-    if (special_rect_is_ours(m)) return true;
-    for (int i = 0; i < 4; ++i)
-        if (special_rect(m, i) != kSpecialRect[i]) return false;
+    return special_rect_is_ours(m, PolyScene::Stage) || rect_is(m, kSpecialRect);
+}
+
+namespace {
+
+// The results screen's vertex X, widened by a margin of ce (see PolyScene).
+int16_t results_x(int16_t x, int ce) {
+    if (x <= 0) return x;
+    if (x >= 319) return int16_t(x + 2 * ce);
+    return int16_t(x + ce);
+}
+
+// Whether SDRAM holds the results screen's polygon list as the ROM's image
+// has it, its vertices widened by ce (0: unchanged). With write (the
+// machine's SDRAM), puts the vertices there instead.
+bool results_table(const Machine& m, int ce, uint8_t* write = nullptr) {
+    const uint8_t* rom = m.rom.data.data() + kSdramImageRom;
+    const uint8_t* ram = m.sdram;
+    auto rd16 = [](const uint8_t* p) { return uint16_t(p[0] << 8 | p[1]); };
+    uint32_t o = kResultsTableSdram;
+    while (o + 4 <= kResultsTableEnd) {
+        const uint32_t head = uint32_t(rd16(rom + o)) << 16 | rd16(rom + o + 2);
+        if (!write && std::memcmp(ram + o, rom + o, 4) != 0) return false;
+        o += 4;
+        if (!head) return true;
+        for (uint32_t n = head & 0xFF; n; --n, o += 4) {
+            if (o + 4 > kResultsTableEnd) return false;
+            const uint16_t x = uint16_t(results_x(int16_t(rd16(rom + o)), ce));
+            if (write) {
+                write[o] = uint8_t(x >> 8);
+                write[o + 1] = uint8_t(x);
+            } else if (rd16(ram + o) != x || std::memcmp(ram + o + 2, rom + o + 2, 2) != 0) {
+                return false;
+            }
+        }
+    }
+    return false;
+}
+
+bool results_code_loaded(const Machine& m) {
+    return std::memcmp(m.sdram + kResultsCodeSdram, m.rom.data.data() + kSdramImageRom + kResultsCodeSdram,
+                       kResultsTableSdram - kResultsCodeSdram) == 0;
+}
+
+// Plane A's colour (palette line and index) at plane pixel (x, y).
+uint8_t plane_a_pixel(const Vdp& v, int x, int y) {
+    const uint32_t base = uint32_t(v.reg[2] & 0x38) << 10;
+    const uint32_t cell = uint32_t((y >> 3) & 31) * 64 + uint32_t((x >> 3) & 63);
+    const uint16_t e = uint16_t(v.vram[(base + 2 * cell) & 0xFFFF] << 8 | v.vram[(base + 2 * cell + 1) & 0xFFFF]);
+    int tx = x & 7, ty = y & 7;
+    if (e & 0x0800) tx = 7 - tx;
+    if (e & 0x1000) ty = 7 - ty;
+    const uint8_t b = v.vram[(((e & 0x7FFu) << 5) + uint32_t(ty) * 4 + uint32_t(tx >> 1)) & 0xFFFF];
+    const uint8_t c = (tx & 1) ? (b & 15) : (b >> 4);
+    return c ? uint8_t(((e >> 9) & 0x30) | c) : 0;
+}
+
+// Distance of screen pixel (x, y) from the screen's centre, in quarter pixels
+// (as Vdp::render_line measures it).
+int radius4(int x, int y) {
+    const double dx = double(2 * x + 1 - kNativeWidth), dy = double(2 * y + 1 - kActiveLines);
+    return int(2.0 * std::sqrt(dx * dx + dy * dy));
+}
+
+} // namespace
+
+bool results_screen_active(const Machine& m) {
+    // It follows the stage, and only the stage: the stage's intro has the
+    // same code and rectangle loaded for a few frames.
+    const PolyScene k = PolyScene(m.poly_scene);
+    if (k != PolyScene::Stage && k != PolyScene::Results) return false;
+    if (!special_projection_loaded(m) || !results_code_loaded(m)) return false;
+    if (!special_rect_is_ours(m, PolyScene::Results) && !rect_is(m, kFullRect)) return false;
+    return results_table(m, m.results_table_patched ? m.special_shift : 0);
+}
+
+static_assert(sizeof(Machine::radial_lut) >= size_t(kRadialLen), "Machine::radial_lut holds kRadialLen entries");
+
+bool bonus_tunnel(const Machine& m, uint8_t* lut) {
+    const Vdp& v = m.vdp;
+    // A 64x32-cell plane, scrolled as a whole, and not at all.
+    if (v.reg[16] != kLevelPlaneSize || (v.reg[11] & 7) != 0) return false;
+    const uint32_t hs = uint32_t(v.reg[13] & 0x3F) << 10;
+    if (v.vram[hs] || v.vram[hs + 1] || (v.vsram[0] & 0x3FF)) return false;
+    // A quarter of a picture, mirrored into the other three: a cheap first
+    // look at the corners' cells before the whole picture is measured.
+    const uint32_t base = uint32_t(v.reg[2] & 0x38) << 10;
+    auto cell = [&](int x, int y) {
+        const uint32_t a = (base + 2 * uint32_t(y * 64 + x)) & 0xFFFF;
+        return uint16_t(v.vram[a] << 8 | v.vram[a + 1]);
+    };
+    const uint16_t corner = cell(0, 0);
+    if (!(corner & 0x7FF) || cell(39, 0) != (corner ^ 0x0800) || cell(0, 27) != (corner ^ 0x1000) ||
+        cell(39, 27) != (corner ^ 0x1800))
+        return false;
+    // Each radius's colour, by vote over the top left quarter of the picture
+    // (it is drawn mirrored). Whole rings stop short of the corners (r 195).
+    constexpr int kInPicture = 4 * 190;
+    static_assert(kInPicture < kRadialLen, "");
+    thread_local uint16_t votes[kInPicture][64];
+    std::memset(votes, 0, sizeof votes);
+    for (int y = 0; y < kActiveLines / 2; ++y)
+        for (int x = 0; x < kNativeWidth / 2; ++x) {
+            const int r4 = radius4(x, y);
+            if (r4 < kInPicture) ++votes[r4][plane_a_pixel(v, x, y)];
+        }
+    for (int r4 = 0; r4 < kInPicture; ++r4) {
+        int best = 0;
+        for (int c = 1; c < 64; ++c)
+            if (votes[r4][c] > votes[r4][best]) best = c;
+        lut[r4] = uint8_t(best);
+    }
+    // From r = 80 out: runs of colours 1, 2 .. K of palette line 0, every
+    // run in a ring as wide.
+    constexpr int kFrom = 4 * 80;
+    int pos = kFrom;
+    while (pos < kInPicture && lut[pos] != 1) ++pos;
+    int k = 0, last_c = 0, last_w4 = 0, last_end = -1;
+    for (int run = pos; run < kInPicture;) {
+        int end = run;
+        while (end < kInPicture && lut[end] == lut[run]) ++end;
+        if (end >= kInPicture) break;  // cut short where the picture ends
+        const int c = lut[run];
+        if (c == 1 && last_c) {
+            if (k && k != last_c) return false;
+            k = last_c;
+        } else if (c < 1 || c > 15 || (last_c && c != last_c + 1)) {
+            return false;
+        }
+        last_c = c;
+        last_w4 = end - run;
+        last_end = end;
+        run = end;
+    }
+    if (last_end < 0 || k < 4 || last_w4 < 4) return false;
+    // The rings must make the whole picture, not just the diagonal.
+    int checked = 0, matching = 0;
+    for (int y = 1; y < kActiveLines; y += 3)
+        for (int x = 1; x < kNativeWidth; x += 3) {
+            const int r4 = radius4(x, y);
+            if (r4 < kFrom || r4 + 1 >= last_end) continue;
+            const int c = plane_a_pixel(v, x, y);
+            ++checked;
+            if (c == lut[r4] || c == lut[r4 - 1] || c == lut[r4 + 1]) ++matching;
+        }
+    if (checked < 2000 || matching * 100 < checked * 97) return false;
+    // Further out they go on as drawn: one index per w px, w one more for
+    // every ring.
+    int ring = (last_w4 + 2) / 4, c = last_c;
+    for (pos = last_end; pos < kRadialLen;) {
+        c = c % k + 1;
+        if (c == 1) ++ring;
+        for (int i = 0; i < 4 * ring && pos < kRadialLen; ++i) lut[pos++] = uint8_t(c);
+    }
     return true;
+}
+
+void sh2_hook(Machine& m, sh2::State& c, uint32_t pc) {
+    if (pc != kSh2BlitScaled || c.id != 0 || c.pr != kBonusItemReturn) return;
+    if (!m.wide_special || PolyScene(m.poly_scene) != PolyScene::Bonus) return;
+    // As far right as the centre the handler was given.
+    const uint16_t mov = sdram16(m, kBonusCentreSdram);
+    if ((mov & 0xFF00) != 0xEA00 || sdram16(m, kBonusCentreSdram + 2) != kBonusCentreNext) return;
+    c.r[1] -= uint32_t(int(uint8_t(mov)) - kBonusCentre);
+}
+
+bool is_widened_clear(const Machine& m, uint32_t word_addr, uint32_t words, uint16_t data) {
+    if (!m.wide_special || data != 0) return false;
+    switch (PolyScene(m.poly_scene)) {
+    case PolyScene::None:  // set by hand (tests): the stage, as it always was
+    case PolyScene::Stage: return (word_addr & 0xFF) == kSpecialClearStart && words == kSpecialClearLen + 1u;
+    case PolyScene::Bonus: return (word_addr & 0xFF) == 0 && words == kBonusClearLen + 1u;
+    default: return false;
+    }
 }
 
 uint64_t scene_key(const Machine& m) {
@@ -298,26 +490,71 @@ void begin_frame(Machine& m) {
     // at once; only turning widescreen off and on again waits for the next
     // load. The bottom rows need no patch, so they only wait for a level
     // scene.
-    const bool level = (e > 0 || eb > 0) && (e == 0 || m.plane_shift > 0) &&
+    // In play the bonus stage is called from inside a level ($892970) and
+    // hands back to it: the game mode, zone and level stay the level's, the
+    // level engine is merely stopped, and its plane size is the level's. So it
+    // is looked for first, by its own picture, which no level has.
+    const bool bonus = m.wide_enabled && e > 0 && special_projection_loaded(m) &&
+                       (special_rect_is_ours(m, PolyScene::Bonus) || rect_is(m, kFullRect)) &&
+                       bonus_tunnel(m, m.radial_lut);
+    const bool level = !bonus && (e > 0 || eb > 0) && (e == 0 || m.plane_shift > 0) &&
                        m.vdp.reg[16] == kLevelPlaneSize && wide_scene_active(m);
-    // Only side margins in the special stage: its rectangle ends at 219.
-    m.wide_special = !level && m.wide_enabled && e > 0 && special_stage_active(m);
-    m.wide_active = level || m.wide_special;
-    if (m.wide_special) {
-        // Same multiple of 8 as the level clip, which also keeps the shift
-        // even, so a moved fill stays word-aligned.
-        const int ce = (e + 7) & ~7;
-        write_special_rect(m, 0, int16_t(319 + 2 * ce));
-        set_special_projection(m, ce);
-        m.special_shift = ce;
-        m.special_rect_overridden = true;
-    } else if (m.special_rect_overridden) {
-        // Put the stage's own rectangle and centre back, unless something
-        // has already replaced them (the next scene sets its own).
-        if (special_rect_is_ours(m)) write_special_rect(m, kSpecialRect[0], kSpecialRect[1]);
+    // The scenes drawn by the special stage's polygon code (PolyScene): the
+    // stage itself (only side margins: its rectangle ends at 219), the
+    // results screen after it, and the bonus stage.
+    PolyScene want = PolyScene::None;
+    if (bonus) want = PolyScene::Bonus;
+    else if (!level && m.wide_enabled && e > 0) {
+        if (special_stage_active(m)) want = PolyScene::Stage;
+        else if (results_screen_active(m)) want = PolyScene::Results;
+    }
+    // Same multiple of 8 as the level clip, which also keeps the shift even,
+    // so a moved fill stays word-aligned.
+    const int ce = (e + 7) & ~7;
+    const PolyScene had = PolyScene(m.poly_scene);
+    if (had != PolyScene::None && (want != had || m.special_shift != ce)) {
+        // Put the scene's own rectangle, centre and polygons back, unless
+        // something has already replaced them (the next scene sets its own).
+        if (special_rect_is_ours(m, had)) write_special_rect(m, native_rect(had)[0], native_rect(had)[1]);
         set_special_projection(m, 0);
+        set_bonus_centre(m, 0);
+        if (m.results_table_patched && results_table(m, m.special_shift)) results_table(m, 0, m.sdram);
+        if (m.bonus_clip_overridden) {
+            const uint8_t* p = m.sdram + kClipRectSdram;
+            if (int16_t(p[0] << 8 | p[1]) == -m.special_shift && int16_t(p[2] << 8 | p[3]) == 320 + m.special_shift)
+                write_clip(m, 0, 320, uint32_t(p[8]) << 24 | uint32_t(p[9]) << 16 | uint32_t(p[10]) << 8 | p[11]);
+        }
+        m.results_table_patched = false;
+        m.bonus_clip_overridden = false;
         m.special_shift = 0;
         m.special_rect_overridden = false;
+        m.poly_scene = uint8_t(PolyScene::None);
+    }
+    m.wide_special = want != PolyScene::None;
+    m.wide_active = level || m.wide_special;
+    m.radial_len = want == PolyScene::Bonus ? kRadialLen : 0;
+    if (m.wide_special) {
+        m.poly_scene = uint8_t(want);
+        write_special_rect(m, 0, int16_t(319 + 2 * ce));
+        // Where each scene's polygons get their X: the stage's projections,
+        // the bonus stage's centre, the results screen's list.
+        if (want == PolyScene::Stage) set_special_projection(m, ce);
+        if (want == PolyScene::Bonus) set_bonus_centre(m, ce);
+        m.special_shift = ce;
+        m.special_rect_overridden = true;
+        if (want == PolyScene::Results && !m.results_table_patched) {
+            results_table(m, ce, m.sdram);
+            m.results_table_patched = true;
+        }
+        if (want == PolyScene::Bonus) {
+            // The items are blitted where they are: their clip reaches into
+            // the margins, as in a level, and what lands there goes to the
+            // shadow.
+            const uint8_t* p = m.sdram + kClipRectSdram;
+            write_clip(m, int16_t(-ce), int16_t(320 + ce),
+                       uint32_t(p[8]) << 24 | uint32_t(p[9]) << 16 | uint32_t(p[10]) << 8 | p[11]);
+            m.bonus_clip_overridden = true;
+        }
     }
     if (level) {
         // The blitters write 16-bit words at clip-aligned addresses: an odd
@@ -354,6 +591,10 @@ void install(Machine& m) {
     m.wide_special = false;
     m.special_rect_overridden = false;
     m.special_shift = 0;
+    m.poly_scene = 0;
+    m.results_table_patched = false;
+    m.bonus_clip_overridden = false;
+    m.radial_len = 0;
     m.cull_shift = 0;
     m.plane_fill_clamped = true;
 }

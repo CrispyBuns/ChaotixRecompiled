@@ -260,7 +260,7 @@ void SpriteLayer::fill(const Machine& m, int b, uint32_t addr, uint32_t words, u
     constexpr int E = patches::kMaxWideExtra;
     // As Machine::vdp32x_write does the fill.
     if (m.wide_special) {
-        if ((addr & 0xFF) == patches::kSpecialClearStart && words == patches::kSpecialClearLen + 1u && data == 0) {
+        if (patches::is_widened_clear(m, addr, words, data)) {
             const uint32_t line = (addr & 0xFF00) * 2u;
             for (int x = -E; x < kNativeWidth + E; ++x) {
                 const uint32_t o = (line + uint32_t(x)) & 0x1FFFF;
