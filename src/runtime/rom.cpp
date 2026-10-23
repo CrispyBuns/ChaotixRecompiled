@@ -1,4 +1,8 @@
 #include "rom.h"
+#include "rom_patch.h"
+#include <algorithm>
+#include <fstream>
+#include <iterator>
 #include <cstdio>
 #include <cstring>
 
@@ -133,6 +137,85 @@ uint16_t Rom::compute_checksum() const {
     uint16_t sum = 0;
     for (size_t i = 0x200; i + 1 < file_size; i += 2) sum = uint16_t(sum + read16(uint32_t(i)));
     return sum;
+}
+
+int Rom::apply_patches(const std::vector<std::string>& paths, std::vector<std::string>* messages) {
+    auto say = [messages](std::string m) { if (messages) messages->push_back(std::move(m)); };
+    const std::vector<uint8_t>& base = unpatched();
+    std::vector<uint8_t> file(base.begin(), base.begin() + long(file_size));
+    std::vector<uint8_t> image = file;
+    int applied = 0;
+    for (const auto& path : paths) {
+        std::ifstream f(path, std::ios::binary);
+        if (!f) { say("skipped " + path + ": cannot read it"); continue; }
+        const std::vector<uint8_t> patch((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        std::string err;
+        if (rom_patch::apply(image, patch.data(), patch.size(), &err)) {
+            ++applied;
+            say("applied " + path);
+        } else {
+            say("skipped " + path + ": " + err);
+        }
+    }
+    if (!applied) return 0;
+    return adopt(std::move(image), file, messages) ? applied : 0;
+}
+
+int Rom::apply_edits(const std::vector<RomEdit>& edits, std::vector<std::string>* messages) {
+    auto say = [messages](std::string m) { if (messages) messages->push_back(std::move(m)); };
+    // Over the ROM as it is now, so that edits stack on the patch files.
+    const std::vector<uint8_t> file(data.begin(), data.begin() + long(file_size));
+    std::vector<uint8_t> image = file;
+    for (const RomEdit& e : edits) {
+        if (e.bytes.empty()) continue;
+        if (e.offset >= image.size() || e.bytes.size() > image.size() - e.offset) {
+            char where[32];
+            std::snprintf(where, sizeof where, "0x%06X", unsigned(e.offset));
+            say(std::string("skipped an edit at ") + where + ": past the end of the ROM");
+            continue;
+        }
+        std::memcpy(image.data() + e.offset, e.bytes.data(), e.bytes.size());
+    }
+    int changed = 0;
+    for (size_t i = 0; i < image.size(); ++i) changed += image[i] != file[i];
+    if (!changed) return 0;
+    return adopt(std::move(image), file, messages) ? changed : 0;
+}
+
+bool Rom::adopt(std::vector<uint8_t> image, const std::vector<uint8_t>& before, std::vector<std::string>* messages) {
+    auto say = [messages](std::string m) { if (messages) messages->push_back(std::move(m)); };
+    // The game checks the header checksum as it boots and stops at a blank
+    // screen if it is wrong. Patches made from a hacked ROM carry the fixed
+    // checksum; hand-made ones often do not, so it is fixed here -- if the
+    // ROM's own was right to begin with.
+    auto checksum = [](const std::vector<uint8_t>& b) {
+        uint16_t sum = 0;
+        for (size_t i = 0x200; i + 1 < b.size(); i += 2) sum = uint16_t(sum + (b[i] << 8 | b[i + 1]));
+        return sum;
+    };
+    if (image.size() >= 0x200 && checksum(before) == header_checksum) {
+        const uint16_t sum = checksum(image);
+        if ((image[0x18E] << 8 | image[0x18F]) != sum) {
+            image[0x18E] = uint8_t(sum >> 8);
+            image[0x18F] = uint8_t(sum);
+            say("header checksum updated for the patched ROM");
+        }
+    }
+    Rom r;
+    std::string err;
+    if (!r.load_memory(image.data(), image.size(), &err)) {
+        say("patched ROM rejected (" + err + "); using the ROM as it is");
+        return false;
+    }
+    const std::vector<uint8_t>& base = unpatched();
+    const std::vector<uint8_t> unpatched_file(base.begin(), base.begin() + long(std::min(file_size, base.size())));
+    r.original = base;
+    r.patched = rom_patch::changed_ranges(unpatched_file, image);
+    r.patched_sha1 = r.sha1;
+    r.sha1 = sha1;
+    r.version = version;
+    *this = std::move(r);
+    return true;
 }
 
 } // namespace chaotix

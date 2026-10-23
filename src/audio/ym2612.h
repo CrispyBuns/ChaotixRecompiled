@@ -27,6 +27,22 @@ public:
     // state: the game cannot see it.
     float gain[6] = {1, 1, 1, 1, 1, 1};
 
+    // Save states (runtime/save_state.h): every field of the chip's state, in
+    // a fixed order, through the archive `a`. Not gain, the host's.
+    template <class A> void state_io(A& a) {
+        for (Ch& c : ch_) {
+            for (Op& o : c.op) {
+                a(o.phase); a(o.inc); a(o.dt); a(o.mul); a(o.tl); a(o.ks); a(o.ar); a(o.am);
+                a(o.d1r); a(o.d2r); a(o.sl); a(o.rr); a(o.ssg); a(o.env); a(o.state); a(o.key); a(o.out);
+            }
+            a(c.fnum); a(c.block); a(c.fnum_hi); a(c.alg); a(c.fb); a(c.ams); a(c.pms);
+            a(c.left); a(c.right); a(c.fb_mem); a(c.mem);
+        }
+        a(addr_); a(ch3_fnum_); a(ch3_block_); a(ch3_hi_); a(ch3_special_); a(lfo_en_); a(lfo_rate_);
+        a(lfo_cnt_); a(lfo_step_); a(dac_en_); a(dac_); a(eg_cnt_); a(eg_div_); a(ta_); a(tb_);
+        a(timer_ctrl_); a(ta_cnt_); a(tb_cnt_); a(status_);
+    }
+
 private:
     struct Op {
         uint32_t phase = 0, inc = 0;

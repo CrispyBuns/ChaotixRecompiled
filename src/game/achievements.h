@@ -88,6 +88,10 @@ public:
     // Call once per emulated frame. `unlocked` is invoked for each newly
     // unlocked achievement.
     void update(const Machine& m, const std::function<void(const Achievement&)>& unlocked);
+    // The game jumped in time (a save state loaded, a rewind step): the last
+    // frame seen is not the one before the next, so prev() has nothing to
+    // compare with until a frame has been seen again.
+    void forget_previous() { previous_.clear(); have_previous_ = false; }
 
     const std::vector<Achievement>& list() const { return achievements_; }
     int unlocked_count() const;

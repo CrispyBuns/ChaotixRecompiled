@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstdio>
+#include <iterator>
 #include <string>
 
+#include "frontend/backdrop.h"
 #include "frontend/config.h"
 #include "game/achievements.h"
 #include "game/cheats.h"
@@ -40,6 +42,7 @@ bool Menu::is_row_page(Page p) { return p == Page::Main; }
 
 bool Menu::is_list_page(Page p) {
     return p == Page::Front || p == Page::Options || p == Page::Controls || p == Page::Keys ||
+           p == Page::States || p == Page::StateKeys ||
            p == Page::TimeAttack || p == Page::Cheats || p == Page::Video || p == Page::Sound ||
            p == Page::Input || p == Page::Extras;
 }
@@ -49,7 +52,7 @@ Menu::Page Menu::parent_of(Page p) {
     switch (p) {
     case Page::Video: case Page::Sound: case Page::Input: case Page::Extras: return Page::Options;
     case Page::Cheats: return Page::Extras;
-    case Page::Keys: return Page::Controls;
+    case Page::Keys: case Page::StateKeys: return Page::Controls;
     default: return Page::Closed;
     }
 }
@@ -71,6 +74,8 @@ void Menu::set_page(Page p) {
     else if (p == Page::Extras) build_extras();
     else if (p == Page::Controls) build_controls();
     else if (p == Page::Keys) build_keys();
+    else if (p == Page::States) build_states();
+    else if (p == Page::StateKeys) build_state_keys();
     else if (p == Page::TimeAttack) build_time_attack();
     else if (p == Page::Cheats) build_cheats();
     else items_.clear();
@@ -95,6 +100,8 @@ bool Menu::show_page(const std::string& name) {
         set_page(Page::Keys);
     }
     else if (name == "main") set_page(Page::Main);
+    else if (name == "states") set_page(Page::States);
+    else if (name == "statekeys") set_page(Page::StateKeys);
     else if (name == "options") set_page(Page::Options);
     else if (name == "video") set_page(Page::Video);
     else if (name == "sound") set_page(Page::Sound);
@@ -119,6 +126,8 @@ std::string Menu::page_name() const {
     case Page::TimeAttack: return "timeattack";
     case Page::Achievements: return "awards";
     case Page::Cheats: return "cheats";
+    case Page::States: return "states";
+    case Page::StateKeys: return "statekeys";
     default: return "";
     }
 }
@@ -126,6 +135,11 @@ std::string Menu::page_name() const {
 std::string Menu::selected_label() const {
     if (selected_ < 0 || selected_ >= int(items_.size())) return "";
     return items_[size_t(selected_)].label;
+}
+
+std::string Menu::selected_value() const {
+    if (selected_ < 0 || selected_ >= int(items_.size()) || !items_[size_t(selected_)].value) return "";
+    return items_[size_t(selected_)].value();
 }
 
 std::string Menu::selected_note() const {
@@ -153,6 +167,9 @@ void Menu::build_front() {
 void Menu::build_main() {
     items_.clear();
     items_.push_back({"RESUME", {}, [this](int) { close(); }});
+    // Save states and rewind (issue #40): a page of their own, so that the
+    // row stays short enough for a phone.
+    items_.push_back({"STATES", {}, [this](int) { set_page(Page::States); }});
     items_.push_back({"OPTIONS", {}, [this](int) { set_page(Page::Options); }});
     items_.push_back({"CONTROLS", {}, [this](int) { set_page(Page::Controls); }});
     items_.push_back({"AWARDS", {}, [this](int) { set_page(Page::Achievements); }});
@@ -197,6 +214,37 @@ const MenuButtonChoice kMenuButtons[] = {
     {"misc1", "SHARE / CAPTURE"},
 };
 constexpr int kMenuButtonCount = int(sizeof kMenuButtons / sizeof kMenuButtons[0]);
+
+// Fast-forward on a pad (issue #45): the same spare buttons, and the triggers,
+// which the emulated pad does not use either (SDL calls them axes; the
+// frontend reads them as pressed past half way).
+const MenuButtonChoice kFastForwardButtons[] = {
+    {"righttrigger", "RIGHT TRIGGER"},
+    {"lefttrigger", "LEFT TRIGGER"},
+    {"rightstick", "RIGHT STICK CLICK"},
+    {"leftstick", "LEFT STICK CLICK"},
+    {"guide", "GUIDE / HOME / PS"},
+    {"touchpad", "TOUCHPAD CLICK"},
+    {"misc1", "SHARE / CAPTURE"},
+    {"none", "NONE"},
+};
+constexpr int kFastForwardButtonCount = int(sizeof kFastForwardButtons / sizeof kFastForwardButtons[0]);
+// What awaiting_ holds while a host key (fast-forward, save states, rewind)
+// is being captured; the key page's captures are Mega Drive button names,
+// which these are not.
+const char kFastForwardCapture[] = "fast forward";
+const char kSaveStateCapture[] = "save state";
+const char kLoadStateCapture[] = "load state";
+const char kSlotCapture[] = "next slot";
+const char kRewindCapture[] = "rewind";
+
+// The gamepad buttons the host's own functions may use: the menu button's
+// choices, the triggers, and NONE.
+const MenuButtonChoice* pad_choice(const std::string& name) {
+    for (const MenuButtonChoice& b : kFastForwardButtons)
+        if (name == b.name) return &b;
+    return nullptr;
+}
 
 std::string upper(std::string v) {
     for (char& c : v) c = char(std::toupper((unsigned char)c));
@@ -264,10 +312,159 @@ void Menu::build_controls() {
                           int i = 0;
                           for (int k = 0; k < kMenuButtonCount; ++k)
                               if (c->menu_button == kMenuButtons[k].name) i = k;
-                          i = (i + step + kMenuButtonCount) % kMenuButtonCount;
+                          // Not the fast-forward button: one button, one job.
+                          do i = (i + step + kMenuButtonCount) % kMenuButtonCount;
+                          while (c->ff_button == kMenuButtons[i].name || c->rewind_button == kMenuButtons[i].name ||
+                                 c->state_save_button == kMenuButtons[i].name ||
+                                 c->state_load_button == kMenuButtons[i].name);
                           c->menu_button = kMenuButtons[i].name;
                       }});
+    // Fast-forward (issue #45): Tab and the right trigger to begin with.
+    // How it behaves (held or toggled, how fast) is under OPTIONS > INPUT.
+    items_.push_back({"FAST FORWARD KEY",
+                      [this, c] {
+                          if (awaiting_ == kFastForwardCapture) return std::string("PRESS A KEY");
+                          return c->ff_key.empty() ? std::string("-") : upper(c->ff_key);
+                      },
+                      [this](int step) { if (step == 0) awaiting_ = kFastForwardCapture; },
+                      {}, /*read_only=*/false, /*pressed=*/true});
+    items_.push_back({"FAST FORWARD PAD",
+                      [c] {
+                          for (const MenuButtonChoice& b : kFastForwardButtons)
+                              if (c->ff_button == b.name) return std::string(b.label);
+                          return upper(c->ff_button);
+                      },
+                      [c](int step) {
+                          if (!step) return;
+                          int i = 0;
+                          for (int k = 0; k < kFastForwardButtonCount; ++k)
+                              if (c->ff_button == kFastForwardButtons[k].name) i = k;
+                          do i = (i + step + kFastForwardButtonCount) % kFastForwardButtonCount;
+                          while (c->menu_button == kFastForwardButtons[i].name ||
+                                 (std::string(kFastForwardButtons[i].name) != "none" &&
+                                  (c->rewind_button == kFastForwardButtons[i].name ||
+                                   c->state_save_button == kFastForwardButtons[i].name ||
+                                   c->state_load_button == kFastForwardButtons[i].name)));
+                          c->ff_button = kFastForwardButtons[i].name;
+                      }});
+    // Issue #40: the keys and buttons for save states and rewind, on a page of
+    // their own (this one is as long as a phone's screen allows).
+    items_.push_back({"STATES AND REWIND", {}, [this](int) { set_page(Page::StateKeys); }});
     items_.push_back({"BACK", {}, [this](int) { const Page back = return_to_; set_page(back); }});
+}
+
+std::string* Menu::capture_target(const std::string& what) const {
+    if (!cfg_) return nullptr;
+    if (what == kFastForwardCapture) return &cfg_->ff_key;
+    if (what == kSaveStateCapture) return &cfg_->state_save_key;
+    if (what == kLoadStateCapture) return &cfg_->state_load_key;
+    if (what == kSlotCapture) return &cfg_->state_slot_key;
+    if (what == kRewindCapture) return &cfg_->rewind_key;
+    return nullptr;
+}
+
+// Save states (issue #40), from the pause menu: the slot quick save and quick
+// load use, and rewind on or off. Saving or loading closes the menu: the
+// player wants the game, and the message says how it went.
+void Menu::build_states() {
+    items_.clear();
+    Config* c = cfg_;
+    if (!c) return;
+    auto locked = [this] { return hooks_.states_locked ? hooks_.states_locked() : std::string(); };
+    auto slot_note = [this, c, locked] {
+        const std::string why = locked();
+        if (!why.empty()) return why;
+        return hooks_.state_info ? hooks_.state_info(c->state_slot) : std::string();
+    };
+    items_.push_back({"SAVE STATE", {}, [this, c](int step) {
+        if (step != 0) return;
+        close();
+        if (hooks_.save_state) hooks_.save_state(c->state_slot);
+    }});
+    items_.push_back({"LOAD STATE", {}, [this, c](int step) {
+        if (step != 0) return;
+        close();
+        if (hooks_.load_state) hooks_.load_state(c->state_slot);
+    }});
+    items_.push_back({"SLOT",
+                      [c] { return std::to_string(c->state_slot); },
+                      [this, c, slot_note](int s) {
+                          if (!s) return;
+                          c->state_slot = (c->state_slot - 1 + s + kStateSlots) % kStateSlots + 1;
+                          // The note says what the slot holds, so it follows.
+                          items_[size_t(selected_)].note = slot_note();
+                      },
+                      slot_note()});
+    items_.push_back({"REWIND",
+                      [c] { return on_off(c->rewind); },
+                      [c](int s) { if (s) c->rewind = !c->rewind; },
+                      locked().empty() ? std::string("hold the rewind key or button") : locked()});
+    items_.push_back({"BACK", {}, [this](int) { set_page(return_to_); }});
+}
+
+// Rewind on or off, and the keys and buttons for save states and rewind
+// (CONTROLS > STATES AND REWIND). Keys are captured like the fast-forward
+// key; buttons step through the ones the game leaves alone, never one another
+// host function holds. Ten rows, as many as a phone's screen holds.
+void Menu::build_state_keys() {
+    items_.clear();
+    Config* c = cfg_;
+    if (!c) return;
+    items_.push_back({"REWIND",
+                      [c] { return on_off(c->rewind); },
+                      [c](int s) { if (s) c->rewind = !c->rewind; },
+                      "keep the last minute to step back through"});
+    items_.push_back({"TOUCH REWIND",
+                      [c] { return on_off(c->touch_rewind); },
+                      [c](int s) { if (s) c->touch_rewind = !c->touch_rewind; },
+                      "an on-screen button for it"});
+    auto key_row = [this](const char* label, const char* capture, std::string Config::*field) {
+        Config* cc = cfg_;
+        items_.push_back({label,
+                          [this, cc, capture, field] {
+                              if (awaiting_ == capture) return std::string("PRESS A KEY");
+                              const std::string& v = cc->*field;
+                              return v.empty() ? std::string("-") : upper(v);
+                          },
+                          [this, capture](int step) { if (step == 0) awaiting_ = capture; },
+                          {}, /*read_only=*/false, /*pressed=*/true});
+    };
+    key_row("SAVE STATE KEY", kSaveStateCapture, &Config::state_save_key);
+    key_row("LOAD STATE KEY", kLoadStateCapture, &Config::state_load_key);
+    key_row("NEXT SLOT KEY", kSlotCapture, &Config::state_slot_key);
+    key_row("REWIND KEY", kRewindCapture, &Config::rewind_key);
+    auto pad_row = [this](const char* label, std::string Config::*field) {
+        Config* cc = cfg_;
+        items_.push_back({label,
+                          [cc, field] {
+                              const MenuButtonChoice* b = pad_choice(cc->*field);
+                              return b ? std::string(b->label) : upper(cc->*field);
+                          },
+                          [cc, field](int step) {
+                              if (!step) return;
+                              int i = 0;
+                              for (int k = 0; k < kFastForwardButtonCount; ++k)
+                                  if (cc->*field == kFastForwardButtons[k].name) i = k;
+                              // Not a button the menu, fast-forward or the other two hold.
+                              auto taken = [cc, field](const std::string& name) {
+                                  if (name == "none") return false;
+                                  if (name == cc->menu_button || name == cc->ff_button) return true;
+                                  for (std::string Config::*other : {&Config::state_save_button, &Config::state_load_button,
+                                                                     &Config::rewind_button})
+                                      if (other != field && name == cc->*other) return true;
+                                  return false;
+                              };
+                              for (int tries = 0; tries < kFastForwardButtonCount; ++tries) {
+                                  i = (i + step + kFastForwardButtonCount) % kFastForwardButtonCount;
+                                  if (!taken(kFastForwardButtons[i].name)) break;
+                              }
+                              cc->*field = kFastForwardButtons[i].name;
+                          }});
+    };
+    pad_row("SAVE STATE PAD", &Config::state_save_button);
+    pad_row("LOAD STATE PAD", &Config::state_load_button);
+    pad_row("REWIND PAD", &Config::rewind_button);
+    items_.push_back({"BACK", {}, [this](int) { set_page(Page::Controls); }});
 }
 
 // TIME ATTACK: the fields the game's own stage select offers, in its order, so
@@ -306,19 +503,26 @@ void Menu::build_time_attack() {
     items_.push_back({"AT-TIME",
                       [c] { return std::string(kTimes[(c->ta_time >> 1) & 3]); },
                       [c](int s) { if (s) c->ta_time = ((c->ta_time / 2 + s + 4) % 4) * 2; }});
-    // The two character rows skip the gap in the game's table, which loads
-    // broken art.
-    auto step_character = [](int& who, int s) {
+    // The names are the ROM's, so a ROM patch that renames a character shows
+    // here. The two character rows skip the gap in the game's table, which
+    // loads broken art, for as long as it has only the game's placeholder
+    // for a name.
+    std::vector<std::string> names = characters_;
+    if (names.size() != size_t(kCharacterCount)) names.assign(std::begin(kCharacters), std::end(kCharacters));
+    auto name_of = [names](int who) {
+        return who >= 0 && who < kCharacterCount ? names[size_t(who)] : std::string();
+    };
+    auto step_character = [names](int& who, int s) {
         for (int i = 0; i < kCharacterCount; ++i) {
             who = (who + s + kCharacterCount) % kCharacterCount;
-            if (who != kBrokenCharacter) return;
+            if (!is_placeholder_name(names[size_t(who)])) return;
         }
     };
     items_.push_back({"PLAYER",
-                      [c] { return std::string(kCharacters[c->ta_player]); },
+                      [c, name_of] { return name_of(c->ta_player); },
                       [c, step_character](int s) { if (s) step_character(c->ta_player, s); }});
     items_.push_back({"COMBI",
-                      [c] { return std::string(kCharacters[c->ta_combi]); },
+                      [c, name_of] { return name_of(c->ta_combi); },
                       [c, step_character](int s) { if (s) step_character(c->ta_combi, s); }});
     items_.push_back({"PLAYERS",
                       [c] { return std::string(c->ta_two_players ? "2 PLAYERS" : "1 PLAYER"); },
@@ -446,10 +650,38 @@ void Menu::build_input() {
     items_.push_back({"TOUCH PAD",
                       [c] { return std::string(kTouchNames[int(c->touch)]); },
                       [c](int s) { if (s) cycle(c->touch, 3, s); }});
+    items_.push_back({"TOUCH LAYOUT",
+                      [c] { return std::string(c->touch_sonic_cd ? "SONIC CD" : "CLASSIC"); },
+                      [c](int s) { if (s) c->touch_sonic_cd = !c->touch_sonic_cd; },
+                      "SONIC CD: one big jump button, as in its mobile version"});
+    items_.push_back({"TOUCH OPACITY",
+                      [c] { return std::to_string(c->touch_opacity) + "%"; },
+                      [c](int s) { c->touch_opacity = std::clamp(c->touch_opacity + s * 5, 0, 100); },
+                      "the on-screen controls at rest"});
+    items_.push_back({"PRESSED OPACITY",
+                      [c] { return std::to_string(c->touch_pressed_opacity) + "%"; },
+                      [c](int s) { c->touch_pressed_opacity = std::clamp(c->touch_pressed_opacity + s * 5, 0, 100); },
+                      "and while held"});
     items_.push_back({"TOUCH STICK",
                       [c] { return std::string(c->touch_stick ? "JOYSTICK" : "D-PAD"); },
                       [c](int s) { if (s) c->touch_stick = !c->touch_stick; },
                       "the on-screen directions"});
+    // Issue #45. The keys for it are on the CONTROLS page.
+    items_.push_back({"TOUCH FAST FORWARD",
+                      [c] { return on_off(c->touch_ff); },
+                      [c](int s) { if (s) c->touch_ff = !c->touch_ff; },
+                      "an on-screen button for it"});
+    items_.push_back({"FAST FORWARD",
+                      [c] { return std::string(c->ff_mode == FastForwardMode::Toggle ? "TOGGLE" : "HOLD"); },
+                      [c](int s) { if (s) cycle(c->ff_mode, 2, s); },
+                      "not in TIME ATTACK"});
+    items_.push_back({"FAST FORWARD SPEED",
+                      [c] {
+                          return std::string(c->ff_speed == FastForwardSpeed::X2   ? "2X"
+                                             : c->ff_speed == FastForwardSpeed::X4 ? "4X"
+                                                                                   : "MAX");
+                      },
+                      [c](int s) { if (s) cycle(c->ff_speed, 3, s); }});
     items_.push_back({"6-BUTTON PAD",
                       [c] { return on_off(c->six_button); },
                       [c](int s) { if (s) c->six_button = !c->six_button; }});
@@ -472,6 +704,40 @@ void Menu::build_extras() {
         mods.pressed = true;
         items_.push_back(std::move(mods));
     }
+    // Issue #8: this menu's own look. Both are made from the ROM, so they are
+    // the game's rather than ours; PIXEL and PLAIN are the earlier look. Here
+    // rather than under VIDEO, which is as long as a phone's screen allows.
+    items_.push_back({"MENU FONT",
+                      [c] { return std::string(c->menu_game_font ? "GAME" : "PIXEL"); },
+                      [c](int s) { if (s) c->menu_game_font = !c->menu_game_font; },
+                      "the game's own letters"});
+    // Issue #37: CYCLE shows the zones in turn, a zone's name only that one.
+    items_.push_back({"MENU BACKGROUND",
+                      [c] {
+                          if (!c->menu_backdrop_on()) return std::string("PLAIN");
+                          const int zone = c->menu_backdrop_zone();
+                          return zone < 0 ? std::string("CYCLE") : std::string(backdrop_specs()[size_t(zone)].name);
+                      },
+                      [c](int s) {
+                          if (!s) return;
+                          std::vector<std::string> values{"Cycle"};
+                          for (int i : backdrop_menu_order()) values.push_back(backdrop_specs()[size_t(i)].zone);
+                          values.push_back("Plain");
+                          int at = 0;
+                          const std::string now = parse_menu_background(c->menu_background);
+                          for (size_t i = 0; i < values.size(); ++i)
+                              if (values[i] == now) at = int(i);
+                          cycle(at, int(values.size()), s);
+                          c->menu_background = values[size_t(at)];
+                      },
+                      "the game's zones behind it"});
+    items_.push_back({"DUMP GRAPHICS",
+                      [c] { return on_off(c->dump_graphics); },
+                      [c](int s) { if (s) c->dump_graphics = !c->dump_graphics; },
+                      "save the graphics drawn to Mods/Textures/Dump"});
+    if (hooks_.export_sprites)
+        items_.push_back({"EXPORT SPRITES", {}, [this](int step) { if (step == 0) hooks_.export_sprites(); },
+                          "every frame of the characters, to Mods/Textures/Sheets"});
     items_.push_back({"AWARDS",
                       [c] { return on_off(c->achievements); },
                       [c](int s) { if (s) c->achievements = !c->achievements; }});
@@ -568,7 +834,13 @@ bool Menu::on_key(SDL_Keycode key) {
         // Capturing a binding. Escape abandons it; on a gamepad page a key is
         // simply the wrong kind of answer and is ignored.
         if (key == SDLK_ESCAPE) awaiting_.clear();
-        else if (!keys_pad_ && cfg_) {
+        else if (std::string* target = capture_target(awaiting_)) {
+            const char* name = SDL_GetScancodeName(SDL_GetScancodeFromKey(key, nullptr));
+            if (name && *name) {
+                *target = name;
+                awaiting_.clear();
+            }
+        } else if (!keys_pad_ && cfg_) {
             const SDL_Scancode sc = SDL_GetScancodeFromKey(key, nullptr);
             const char* name = SDL_GetScancodeName(sc);
             if (name && *name) {
@@ -609,7 +881,10 @@ bool Menu::on_pad(Uint8 button) {
     if (!open()) return false;
     if (!awaiting_.empty()) {
         // The mirror of the keyboard case: only a gamepad page takes a button.
-        if (keys_pad_ && cfg_) {
+        // The fast-forward key wants a key; the pad's back button gives up.
+        if (capture_target(awaiting_)) {
+            if (button == SDL_GAMEPAD_BUTTON_EAST) awaiting_.clear();
+        } else if (keys_pad_ && cfg_) {
             const char* name = SDL_GetGamepadStringForButton(SDL_GamepadButton(button));
             if (name && *name) {
                 auto& binds = keys_player_ == 0 ? cfg_->pads : cfg_->pads2;
@@ -693,14 +968,43 @@ bool Menu::art_panel(ui::Ui& g, SDL_FRect* out) const {
     return true;
 }
 
+void Menu::set_backdrop(SDL_Texture* texture, float width, float height, ui::Color tint, ui::Color accent) {
+    backdrop_ = texture;
+    backdrop_w_ = width;
+    backdrop_h_ = height;
+    zone_tint_ = tint;
+    zone_accent_ = accent;
+}
+
+bool Menu::backdrop_on() const { return backdrop_ && cfg_ && cfg_->menu_backdrop_on(); }
+
+void Menu::fill(ui::Ui& g, const SDL_FRect& r, ui::Color plain, uint8_t tint_alpha) const {
+    if (!backdrop_on()) {
+        g.rect(r, plain);
+        return;
+    }
+    // The zone's picture, then its own colour over it: translucent enough to
+    // show the place, dark enough that white and yellow letters stay clear.
+    g.image_cover(backdrop_, backdrop_w_, backdrop_h_, r);
+    g.rect(r, zone_tint_.alpha(tint_alpha));
+}
+
 void Menu::draw(ui::Ui& g, achievements::Tracker& ach) {
     if (!open()) return;
     hits_.clear();
     anim_ += 0.08f;
+    // The game's letters are the menu's only: the touch controls and the
+    // notifications keep the pixel face.
+    g.enable_game_font(cfg_ && cfg_->menu_game_font);
 
     // Dim the game rather than cover it: the characters on the title screen
-    // are the backdrop.
-    g.rect({0, 0, g.width(), g.height()}, ui::theme::background.alpha(150));
+    // are the backdrop. On the front end with a zone's picture, only the
+    // title's panel is dimmed, as before; the picture has its own tint.
+    SDL_FRect art{};
+    if (page_ == Page::Front && backdrop_on() && art_panel(g, &art))
+        g.rect(art, ui::theme::background.alpha(150));
+    else
+        g.rect({0, 0, g.width(), g.height()}, ui::theme::background.alpha(150));
 
     if (page_ == Page::Front)
         draw_front(g);
@@ -710,11 +1014,14 @@ void Menu::draw(ui::Ui& g, achievements::Tracker& ach) {
         draw_options(g);
     else
         draw_achievements(g, ach);
+    g.enable_game_font(false);
 }
 
 // A vertical list down the right-hand side, beside the art panel.
 void Menu::draw_backdrop_dim(ui::Ui& g) const {
-    g.rect({0, 0, g.width(), g.height()}, ui::theme::background.alpha(226));
+    // With a zone picture the title is still drawn in its panel, so the
+    // window around it can be the picture instead of a darkened copy.
+    fill(g, {0, 0, g.width(), g.height()}, ui::theme::background.alpha(226), 185);
 }
 
 void Menu::draw_front(ui::Ui& g) {
@@ -724,7 +1031,7 @@ void Menu::draw_front(ui::Ui& g) {
     // A frame around the game's image, so it reads as a picture rather than
     // as the game running underneath.
     g.outline({art.x - g.px(3), art.y - g.px(3), art.w + g.px(6), art.h + g.px(6)},
-              ui::theme::accent, g.px(3), g.px(3));
+              accent(), g.px(3), g.px(3));
 
     const float left = art.x + art.w + g.px(40);
     const float right = g.width() - g.px(28);
@@ -737,7 +1044,7 @@ void Menu::draw_front(ui::Ui& g) {
 
     g.text(ui::Font::Pixel, left, y, "KNUCKLES", ui::theme::text_dim);
     y += g.line_height(ui::Font::Pixel) + g.px(2);
-    g.text(ui::Font::PixelBig, left, y, "CHAOTIX", ui::theme::accent);
+    g.text(ui::Font::PixelBig, left, y, "CHAOTIX", accent());
     y += title_h;
 
     for (size_t i = 0; i < items_.size(); ++i) {
@@ -749,7 +1056,7 @@ void Menu::draw_front(ui::Ui& g) {
             const float bob = std::sin(anim_ * 3.0f) * g.px(2);
             g.rect({left - g.px(12), y - g.px(6), std::min(column, w + g.px(36)),
                     g.line_height(ui::Font::PixelBig) + g.px(12)},
-                   ui::theme::accent_dim, g.px(4));
+                   backdrop_on() ? zone_accent_.alpha(80) : ui::theme::accent_dim, g.px(4));
             g.text(ui::Font::PixelBig, left + bob, y, items_[i].label, ui::theme::text);
         } else {
             g.text(ui::Font::PixelBig, left, y, items_[i].label, ui::theme::text_faint);
@@ -759,7 +1066,7 @@ void Menu::draw_front(ui::Ui& g) {
     }
 
     g.text(ui::Font::Small, left, g.height() - g.px(26),
-           "Up/Down choose    Enter select", ui::theme::text_faint);
+           "Up/Down choose    Enter select", faint());
 }
 
 void Menu::draw_row_page(ui::Ui& g, const char* hint) {
@@ -769,11 +1076,12 @@ void Menu::draw_row_page(ui::Ui& g, const char* hint) {
     // so the art above it stays visible.
     const float band_h = g.px(26) + item_h + g.px(14) + hint_h + g.px(16);
     const float band_y = g.height() - band_h - g.px(24);
-    // Solid: the title screen behind it is bright, and a bar across the
-    // bottom is what these menus looked like anyway.
-    g.rect({0, band_y, g.width(), band_h}, ui::theme::background);
-    g.rect({0, band_y, g.width(), g.px(3)}, ui::theme::accent);
-    g.rect({0, band_y + band_h - g.px(3), g.width(), g.px(3)}, ui::theme::accent);
+    // Solid, or a zone's picture under a heavy tint: the title screen behind
+    // it is bright, and a bar across the bottom is what these menus looked
+    // like anyway.
+    fill(g, {0, band_y, g.width(), band_h}, ui::theme::background, 205);
+    g.rect({0, band_y, g.width(), g.px(3)}, accent());
+    g.rect({0, band_y + band_h - g.px(3), g.width(), g.px(3)}, accent());
 
     // Measure first so the row can be centred as a whole.
     const float gap = g.px(34);
@@ -792,9 +1100,9 @@ void Menu::draw_row_page(ui::Ui& g, const char* hint) {
             // The selected entry gets a marker that bobs, the way these menus
             // have always done it.
             const float bob = std::sin(anim_ * 3.0f) * g.px(2);
-            g.text(ui::Font::Pixel, x - g.px(24) + bob, y, ">", ui::theme::accent);
+            g.text(ui::Font::Pixel, x - g.px(24) + bob, y, ">", accent());
             g.text(ui::Font::Pixel, x, y, items_[i].label, ui::theme::text);
-            g.rect({x, y + item_h + g.px(4), w, g.px(3)}, ui::theme::accent);
+            g.rect({x, y + item_h + g.px(4), w, g.px(3)}, accent());
         } else {
             g.text(ui::Font::Pixel, x, y, items_[i].label, ui::theme::text_faint);
         }
@@ -803,7 +1111,7 @@ void Menu::draw_row_page(ui::Ui& g, const char* hint) {
     }
 
     g.text(ui::Font::Small, (g.width() - g.text_width(ui::Font::Small, hint)) * 0.5f,
-           band_y + band_h - g.px(16) - hint_h, hint, ui::theme::text_faint);
+           band_y + band_h - g.px(16) - hint_h, hint, faint());
 }
 
 void Menu::draw_options(ui::Ui& g) {
@@ -835,8 +1143,13 @@ void Menu::draw_options(ui::Ui& g) {
     float y = std::max(g.px(14), (g.height() - total) * 0.5f) + g.px(16);
     const float panel_top = y - g.px(16);
 
-    g.panel({x - pad, panel_top, column + pad * 2, total},
-            ui::theme::background.alpha(240), ui::theme::accent, g.px(4), g.px(3));
+    const SDL_FRect panel{x - pad, panel_top, column + pad * 2, total};
+    if (backdrop_on()) {
+        fill(g, panel, ui::theme::background, 205);
+        g.outline(panel, accent(), g.px(4), g.px(3));
+    } else {
+        g.panel(panel, ui::theme::background.alpha(240), accent(), g.px(4), g.px(3));
+    }
 
     const char* heading = page_ == Page::TimeAttack ? "TIME ATTACK"
                         : page_ == Page::Cheats ? "CHEATS"
@@ -845,11 +1158,13 @@ void Menu::draw_options(ui::Ui& g) {
                         : page_ == Page::Input ? "INPUT"
                         : page_ == Page::Extras ? "EXTRAS"
                         : page_ == Page::Controls ? "CONTROLS"
+                        : page_ == Page::States ? "SAVE STATES"
+                        : page_ == Page::StateKeys ? "STATES AND REWIND"
                         : page_ == Page::Keys
                               ? (keys_player_ == 0 ? (keys_pad_ ? "1P GAMEPAD" : "1P KEYBOARD")
                                                    : (keys_pad_ ? "2P GAMEPAD" : "2P KEYBOARD"))
                         : "OPTIONS";
-    g.text(ui::Font::PixelBig, x, y, heading, ui::theme::accent);
+    g.text(ui::Font::PixelBig, x, y, heading, accent());
     y += head_h;
 
     for (size_t i = 0; i < items_.size(); ++i) {
@@ -857,7 +1172,7 @@ void Menu::draw_options(ui::Ui& g) {
         const Item& it = items_[i];
         if (sel) {
             const float bob = std::sin(anim_ * 3.0f) * g.px(2);
-            g.text(ui::Font::Pixel, x - g.px(24) + bob, y, ">", ui::theme::accent);
+            g.text(ui::Font::Pixel, x - g.px(24) + bob, y, ">", accent());
         }
         const float label_w = g.text(ui::Font::Pixel, x, y, it.label,
                                      sel ? ui::theme::text : ui::theme::text_dim);
@@ -865,7 +1180,7 @@ void Menu::draw_options(ui::Ui& g) {
             // Smaller and dimmer than the label, on the same middle line, so
             // it reads as a caption rather than as a second entry.
             const float ny = y + (g.line_height(ui::Font::Pixel) - g.line_height(ui::Font::Small)) * 0.5f;
-            g.text(ui::Font::Small, x + label_w + g.px(16), ny, it.note, ui::theme::text_faint);
+            g.text(ui::Font::Small, x + label_w + g.px(16), ny, it.note, faint());
         }
         const float this_h = wrapped[i] ? row_h * 2 : row_h;
         Hit hit{{x - g.px(24), y - g.px(4), column + g.px(48), this_h}, int(i)};
@@ -878,14 +1193,14 @@ void Menu::draw_options(ui::Ui& g) {
             const float vx = wrapped[i] ? x + g.px(16) : x + column - vw;
             const float room = wrapped[i] ? column - g.px(46) : column;
             g.text_fit(ui::Font::Pixel, vx, vy, room, v,
-                       sel ? ui::theme::accent : ui::theme::text_dim);
+                       sel ? accent() : ui::theme::text_dim);
             // Arrows only where left/right actually does something: on the
             // key page the value changes by capturing a press instead.
             if (sel && !it.pressed && !it.read_only) {
                 const float aw = wrapped[i] ? std::min(vw, room) : vw;
                 const float ax = wrapped[i] ? vx : x + column - vw;
-                g.text(ui::Font::Pixel, ax - g.px(22), vy, "<", ui::theme::accent);
-                g.text(ui::Font::Pixel, ax + aw + g.px(10), vy, ">", ui::theme::accent);
+                g.text(ui::Font::Pixel, ax - g.px(22), vy, "<", accent());
+                g.text(ui::Font::Pixel, ax + aw + g.px(10), vy, ">", accent());
             }
             // The "<" arrow's area, padded to a finger's width. It is taken
             // from where the arrow is drawn when the row is selected, so it
@@ -900,10 +1215,10 @@ void Menu::draw_options(ui::Ui& g) {
         y += this_h;
     }
 
-    const char* hint = page_ == Page::Keys
+    const char* hint = page_ == Page::Keys || page_ == Page::StateKeys
                            ? "Up/Down choose    Enter rebind    Esc back"
                            : "Up/Down choose    Left/Right change    Esc back";
-    g.text(ui::Font::Small, x, y + g.px(8), hint, ui::theme::text_faint);
+    g.text(ui::Font::Small, x, y + g.px(8), hint, faint());
 }
 
 void Menu::draw_achievements(ui::Ui& g, achievements::Tracker& ach) {
@@ -911,8 +1226,8 @@ void Menu::draw_achievements(ui::Ui& g, achievements::Tracker& ach) {
     const float x = (g.width() - column) * 0.5f;
     float y = std::max(g.px(18), g.height() * 0.05f);
 
-    g.rect({0, 0, g.width(), g.height()}, ui::theme::background.alpha(200));
-    g.text(ui::Font::PixelBig, x, y, "AWARDS", ui::theme::accent);
+    fill(g, {0, 0, g.width(), g.height()}, ui::theme::background.alpha(200), 210);
+    g.text(ui::Font::PixelBig, x, y, "AWARDS", accent());
     char head[96];
     std::snprintf(head, sizeof head, "%d OF %zu    %d / %d PTS", ach.unlocked_count(),
                   ach.list().size(), ach.points_earned(), ach.points_total());
@@ -924,7 +1239,7 @@ void Menu::draw_achievements(ui::Ui& g, achievements::Tracker& ach) {
     const int total = ach.points_total();
     const float done = total > 0 ? float(ach.points_earned()) / float(total) : 0.0f;
     g.rect({x, y, column, bar_h}, ui::theme::surface_raised);
-    if (done > 0) g.rect({x, y, column * done, bar_h}, ui::theme::accent);
+    if (done > 0) g.rect({x, y, column * done, bar_h}, accent());
     y += bar_h + g.px(14);
 
     const float row_h = g.line_height(ui::Font::Pixel) + g.line_height(ui::Font::Small) + g.px(16);
@@ -939,12 +1254,12 @@ void Menu::draw_achievements(ui::Ui& g, achievements::Tracker& ach) {
         const auto& a = all[size_t(i)];
         const SDL_FRect row{x, y, column, row_h};
         g.panel(row, a.unlocked ? ui::theme::surface_raised : ui::theme::surface,
-                a.unlocked ? ui::theme::accent : ui::theme::outline, g.px(4), a.unlocked ? 2.0f : 1.0f);
+                a.unlocked ? accent() : ui::theme::outline, g.px(4), a.unlocked ? 2.0f : 1.0f);
         char pts[16];
         std::snprintf(pts, sizeof pts, "%d", a.points);
         const float pw = g.text_width(ui::Font::Pixel, pts);
         g.text(ui::Font::Pixel, x + column - pw - g.px(12), y + g.px(8), pts,
-               a.unlocked ? ui::theme::accent : ui::theme::text_faint);
+               a.unlocked ? accent() : ui::theme::text_faint);
         const float tw = column - pw - g.px(32);
         g.text_fit(ui::Font::Pixel, x + g.px(12), y + g.px(6), tw, a.title,
                    a.unlocked ? ui::theme::text : ui::theme::text_dim);
@@ -953,7 +1268,7 @@ void Menu::draw_achievements(ui::Ui& g, achievements::Tracker& ach) {
         y += row_h + gap;
     }
     g.text(ui::Font::Small, x, g.height() - g.line_height(ui::Font::Small) - g.px(10),
-           "Up/Down scroll    Enter or Esc back", ui::theme::text_faint);
+           "Up/Down scroll    Enter or Esc back", faint());
 }
 
 } // namespace chaotix

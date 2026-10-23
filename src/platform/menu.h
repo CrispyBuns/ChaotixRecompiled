@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "platform/ui.h"
@@ -40,6 +41,9 @@ public:
         std::function<std::string(int index)> pad_name;
         // Locks every achievement again and forgets the saved progress.
         std::function<void()> reset_awards;
+        // Writes every frame of the characters' sprite banks as sheets to
+        // Mods/Textures/Sheets.
+        std::function<void()> export_sprites;
         // Starts a level straight away, the way the game's own stage select
         // would: TIME ATTACK.
         std::function<void(const stage_select::Request&)> start_stage;
@@ -47,9 +51,20 @@ public:
         // button) instead of START GAME: the player goes on from the game's
         // own title screen.
         std::function<void()> front_closed;
+        // Save states (issue #40), in slots 1..kStateSlots: save or load one
+        // (the app says how it went), what a slot holds ("EMPTY", or when it
+        // was saved), and why states cannot be used just now (a TIME ATTACK
+        // run), empty when they can.
+        std::function<void(int slot)> save_state;
+        std::function<void(int slot)> load_state;
+        std::function<std::string(int slot)> state_info;
+        std::function<std::string()> states_locked;
     };
 
     void set_hooks(Hooks h) { hooks_ = std::move(h); }
+    // TIME ATTACK's character names, by id (stage_select::character_names,
+    // read from the ROM); without them, stage_select::kCharacters.
+    void set_character_names(std::vector<std::string> names) { characters_ = std::move(names); }
     // The settings the options page edits. Must outlive the menu.
     void bind(Config& cfg) { cfg_ = &cfg; }
 
@@ -63,6 +78,8 @@ public:
     std::string page_name() const;
     // The highlighted entry's label, empty when the page has no entries.
     std::string selected_label() const;
+    // The value it shows on the right, empty for an action.
+    std::string selected_value() const;
     // What that entry is for, for tests and screenshots.
     std::string selected_note() const;
     void close() { page_ = Page::Closed; }
@@ -77,14 +94,22 @@ public:
     // The front end shows the game beside the list rather than behind it, so
     // it says where the image goes. Returns false to fill the window as usual.
     bool art_panel(ui::Ui& g, SDL_FRect* out) const;
-    // Damps the full-window backdrop before the panel is drawn over it.
+    // Damps the full-window backdrop before the panel is drawn over it, or
+    // with a zone picture behind the menu puts it there instead.
     void draw_backdrop_dim(ui::Ui& g) const;
+    // Issue #8: a picture of one of the game's zones (platform/backdrops.h)
+    // for the menu's panels and backgrounds, with the translucent colour laid
+    // over it and the colour for frames and markers, both taken from it. The
+    // menu uses it unless MENU BACKGROUND is PLAIN; without one it keeps its
+    // plain colours. The texture must outlive its use.
+    void set_backdrop(SDL_Texture* texture, float width, float height, ui::Color tint, ui::Color accent);
+    void clear_backdrop() { backdrop_ = nullptr; }
 
 private:
     // OPTIONS is a list of categories; each category is a page of its own, so
     // that no page runs off a phone's screen.
     enum class Page { Closed, Front, Main, Options, Video, Sound, Input, Extras, Controls, Keys, TimeAttack,
-                      Achievements, Cheats };
+                      Achievements, Cheats, States, StateKeys };
 
     struct Item {
         std::string label;
@@ -122,6 +147,11 @@ private:
     void build_controls();
     void build_time_attack();
     void build_keys();
+    void build_states();
+    void build_state_keys();
+    // The setting a host-key capture writes (fast-forward, save state, ...),
+    // or null when awaiting_ is a Mega Drive button.
+    std::string* capture_target(const std::string& what) const;
     void move(int delta);
     void activate(int step);
     // Escape, the menu button or the pad's back button: one level up, or
@@ -132,6 +162,18 @@ private:
     void draw_options(ui::Ui& g);
     std::vector<std::string> device_choices() const;
     void draw_achievements(ui::Ui& g, achievements::Tracker& ach);
+    bool backdrop_on() const;
+    // The theme's blue, or the zone's colour while its picture is shown.
+    ui::Color accent() const { return backdrop_on() ? zone_accent_ : ui::theme::accent; }
+    // Captions and hints: a step brighter over a picture than over plain dark.
+    ui::Color faint() const { return backdrop_on() ? ui::theme::text_dim : ui::theme::text_faint; }
+    // Fills r with the zone's picture under its tint (or `plain` without
+    // one), as the panels and bands are filled.
+    void fill(ui::Ui& g, const SDL_FRect& r, ui::Color plain, uint8_t tint_alpha) const;
+
+    SDL_Texture* backdrop_ = nullptr;
+    float backdrop_w_ = 0, backdrop_h_ = 0;
+    ui::Color zone_tint_{}, zone_accent_{};
 
     Hooks hooks_;
     Config* cfg_ = nullptr;
@@ -143,6 +185,7 @@ private:
     bool keys_pad_ = false;        // and whether it is their gamepad or keyboard
     std::string awaiting_;         // button being rebound, empty when not capturing
     bool confirm_reset_ = false;   // the reset row is asking a second time
+    std::vector<std::string> characters_;  // see set_character_names
     std::vector<Item> items_;
     int selected_ = 0;
     int scroll_ = 0;          // achievements page

@@ -97,7 +97,24 @@ int main(int argc, char** argv) {
     t += "const CodeRange g_sh2_ranges[] = {\n";
     for (const auto& r : rs.ranges) { std::snprintf(buf, sizeof buf, "  {0x%08Xu, %u, 0x%06Xu},\n", r[0], r[1], r[2]); t += buf; }
     if (rs.ranges.empty()) t += "  {0, 0, 0},\n";
-    t += "};\nconst size_t g_sh2_range_count = " + std::to_string(rs.ranges.size()) + ";\n\n} // namespace recomp\n";
+    t += "};\nconst size_t g_sh2_range_count = " + std::to_string(rs.ranges.size()) + ";\n\n";
+    // ROM bytes run or folded without run-time validation, merged, per CPU.
+    t += "const RomCode g_rom_code[] = {\n";
+    size_t rom_code_count = 0;
+    for (int cpu = 0; cpu < 2; ++cpu) {
+        auto v = cpu == 0 ? rm.rom_code : rs.rom_code;
+        std::sort(v.begin(), v.end());
+        std::vector<std::pair<uint32_t, uint32_t>> merged;
+        for (const auto& r : v) {
+            if (!merged.empty() && r.first <= merged.back().first + merged.back().second)
+                merged.back().second = std::max(merged.back().first + merged.back().second, r.first + r.second) - merged.back().first;
+            else merged.push_back(r);
+        }
+        for (const auto& r : merged) { std::snprintf(buf, sizeof buf, "  {%d, 0x%06Xu, %u},\n", cpu, r.first, r.second); t += buf; }
+        rom_code_count += merged.size();
+    }
+    if (!rom_code_count) t += "  {0, 0, 0},\n";
+    t += "};\nconst size_t g_rom_code_count = " + std::to_string(rom_code_count) + ";\n\n} // namespace recomp\n";
     write_file(out_dir + "/recomp_tables.cpp", t);
 
     // CMake source list

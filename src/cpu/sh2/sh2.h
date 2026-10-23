@@ -36,7 +36,25 @@ struct State {
     // Called when an interrupt is accepted (so the source can be acknowledged).
     void (*irq_ack)(void* user, State* c) = nullptr;
     void* irq_user = nullptr;
+    // Record-only host hooks (the 32X sprite recorder): `hook` runs before any
+    // instruction whose address is in the sorted list hook_pcs. The
+    // interpreter and the generated code call it at the same points; it may
+    // read the CPU and memory but must change nothing the machine sees, and
+    // it costs no cycles. Never called for a delay slot.
+    void (*hook)(State* c, uint32_t pc) = nullptr;
+    void* hook_user = nullptr;
+    const uint32_t* hook_pcs = nullptr;
+    uint32_t hook_count = 0;
 };
+
+// Whether pc is one of c's hook addresses (the caller checked c->hook). The
+// range test first keeps the interpreter's cost per instruction a compare.
+inline bool is_hook_pc(const State* c, uint32_t pc) {
+    if (pc < c->hook_pcs[0] || pc > c->hook_pcs[c->hook_count - 1]) return false;
+    for (uint32_t i = 0; i < c->hook_count; ++i)
+        if (c->hook_pcs[i] == pc) return true;
+    return false;
+}
 
 inline bool fast_area(uint32_t a) { return (a & 0xD8000000u) == 0; }
 inline uint32_t page_of(uint32_t a) { return (a >> Bus::kPageShift) & (Bus::kPages - 1); }

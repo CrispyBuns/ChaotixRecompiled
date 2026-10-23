@@ -34,6 +34,19 @@ std::unordered_map<uint64_t, uint64_t> g_fallback;
 Machine* g_m = nullptr;
 bool g_installed = false;
 
+// Outside the generated-code block: the interpreter reads SH-2 code through
+// it too, so an interpreter-only build needs it as well.
+const uint8_t* sh2_host_ptr(int cpu, uint32_t addr) {
+    uint32_t area = addr >> 29;
+    if (area <= 1) {
+        uint32_t p = addr & 0x1FFFFFFF;
+        if (p >= 0x06000000 && p < 0x08000000) return g_m->sdram + (p & 0x3FFFF);
+        return nullptr;
+    }
+    if (area == 6) return g_m->onchip[cpu].cache_data + (addr & 0xFFF);
+    return nullptr;
+}
+
 #if CHAOTIX_HAVE_GENERATED
 
 std::unordered_map<uint32_t, recomp::M68kFn> g_m68k_map;
@@ -58,16 +71,6 @@ inline recomp::M68kFn lookup_m68k(const m68k::State* c) {
     return it == g_m68k_map.end() ? nullptr : it->second;
 }
 
-const uint8_t* sh2_host_ptr(int cpu, uint32_t addr) {
-    uint32_t area = addr >> 29;
-    if (area <= 1) {
-        uint32_t p = addr & 0x1FFFFFFF;
-        if (p >= 0x06000000 && p < 0x08000000) return g_m->sdram + (p & 0x3FFFF);
-        return nullptr;
-    }
-    if (area == 6) return g_m->onchip[cpu].cache_data + (addr & 0xFFF);
-    return nullptr;
-}
 
 bool sh2_validate(Sh2FnState& s, int cpu) {
     if (s.range_count == 0) return true;
@@ -79,7 +82,10 @@ bool sh2_validate(Sh2FnState& s, int cpu) {
         const recomp::CodeRange& r = recomp::g_sh2_ranges[s.range_begin + i];
         const uint8_t* host = sh2_host_ptr(cpu, r.addr);
         if (!host) continue;
-        if (r.rom_off + r.len > g_m->rom.data.size() || std::memcmp(host, g_m->rom.data.data() + r.rom_off, r.len) != 0) ok = false;
+        // Against the ROM the code was made from, not a patched one (issue #35):
+        // code a patch changed then runs in the interpreter.
+        const std::vector<uint8_t>& rom = g_m->rom.unpatched();
+        if (r.rom_off + r.len > rom.size() || std::memcmp(host, rom.data() + r.rom_off, r.len) != 0) ok = false;
     }
     if (!ok) ++g_stats.sh2_invalid;
     s.valid[cpu] = ok;
@@ -172,6 +178,38 @@ int m68k_call_dynamic(m68k::State* c) {
 #endif
 }
 
+static const uint32_t g_no_epoch = 0;
+const uint32_t* g_sdram_code_epoch = &g_no_epoch;
+
+uint8_t sh2_code_byte(const sh2::State* c, uint32_t addr) {
+    const uint8_t* p = chaotix::sh2_host_ptr(c->id, addr);
+    return p ? *p : 0;
+}
+
+uint16_t sh2_code16(const sh2::State* c, uint32_t addr) {
+    const uint8_t* p = chaotix::sh2_host_ptr(c->id, addr);
+    return p ? uint16_t(p[0] << 8 | p[1]) : 0;
+}
+
+uint32_t sh2_code32(const sh2::State* c, uint32_t addr) {
+    const uint8_t* p = chaotix::sh2_host_ptr(c->id, addr);
+    return p ? uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3] : 0;
+}
+
+bool sh2_callee_valid(const sh2::State* c, uint32_t* cache) {
+#if CHAOTIX_HAVE_GENERATED
+    if (!*cache) {
+        auto it = chaotix::g_sh2_map.find(c->pc);
+        if (it == chaotix::g_sh2_map.end()) return false;
+        *cache = it->second + 1;
+    }
+    return chaotix::sh2_validate(chaotix::g_sh2_fns[*cache - 1], c->id);
+#else
+    (void)c; (void)cache;
+    return false;
+#endif
+}
+
 int sh2_call_dynamic(sh2::State* c) {
 #if CHAOTIX_HAVE_GENERATED
     chaotix::Sh2FnState* s = chaotix::lookup_sh2(c);
@@ -232,13 +270,24 @@ RecompStatus install_recompiled_code(Machine& m, bool enable) {
         else if (area == 6) m.cache_code_ranges.push_back({r.addr & 0xFFF, (r.addr & 0xFFF) + r.len});
     }
     m.remap_sh2();
-    m.exec.m68k_block = m68k_exec;
-    m.exec.sh2_block = sh2_exec;
+    // A ROM patch over code that runs straight from ROM (or literals folded
+    // from it) would be ignored by the generated code: that CPU interprets.
+    bool patched_code[2] = {false, false};
+    for (const auto& [off, len] : m.rom.patched)
+        for (size_t i = 0; i < recomp::g_rom_code_count; ++i) {
+            const recomp::RomCode& rc = recomp::g_rom_code[i];
+            if (rc.len && off < rc.rom_off + rc.len && rc.rom_off < off + len) patched_code[rc.cpu & 1] = true;
+        }
+    if (!patched_code[0]) m.exec.m68k_block = m68k_exec;
+    recomp::g_sdram_code_epoch = &m.sdram_code_epoch;
+    if (!patched_code[1]) m.exec.sh2_block = sh2_exec;
     st.active = true;
     g_installed = true;
-    char buf[256];
-    std::snprintf(buf, sizeof buf, "static recompilation (%zu 68K entry points, %zu SH-2 entry points, %zu SH-2 functions); interpreter fallback for uncovered code",
-                  recomp::g_m68k_entry_count, recomp::g_sh2_entry_count, g_sh2_fns.size());
+    char buf[320];
+    std::snprintf(buf, sizeof buf, "static recompilation (%zu 68K entry points, %zu SH-2 entry points, %zu SH-2 functions); interpreter fallback for uncovered code%s%s",
+                  recomp::g_m68k_entry_count, recomp::g_sh2_entry_count, g_sh2_fns.size(),
+                  patched_code[0] ? "; 68K interpreted (a ROM patch changes its code)" : "",
+                  patched_code[1] ? "; SH-2 interpreted (a ROM patch changes its code)" : "");
     st.description = buf;
 #else
     (void)enable;

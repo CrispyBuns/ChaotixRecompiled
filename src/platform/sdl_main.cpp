@@ -17,6 +17,7 @@
 #include "frontend/debug_overlay.h"
 #include "frontend/setup.h"
 #include "platform/sdl_setup.h"
+#include "platform/backdrops.h"
 #include "platform/frame_pacing.h"
 #include "platform/menu.h"
 #include "platform/ui.h"
@@ -25,11 +26,21 @@
 #include "game/recomp_dispatch.h"
 #include "input/input.h"
 #include "input/touch_controls.h"
+#include "renderer/game_font.h"
+#include "renderer/sprite_pack.h"
+#include "renderer/sprite_sheet.h"
+#include "renderer/tile_pack.h"
+#include "runtime/sprite_record.h"
+#include "runtime/sprite_replace.h"
+#include "runtime/tile_replace.h"
 #include "renderer/image_io.h"
 #include "renderer/viewport.h"
+#include "runtime/character_mods.h"
 #include "runtime/log.h"
 #include "runtime/patches.h"
+#include "runtime/rewind.h"
 #include "runtime/save.h"
+#include "runtime/save_state.h"
 #include "runtime/system.h"
 
 #include <algorithm>
@@ -39,6 +50,8 @@
 #include <map>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -71,6 +84,17 @@ struct App {
     // Touch control images from Mods/Touch (issue #25), by button name;
     // [0] as drawn, [1] while pressed. A missing one is drawn as before.
     std::map<std::string, std::array<SDL_Texture*, 2>> touch_skin;
+    std::string tiles_dir;  // Mods/Textures, for the graphics dumps
+    std::shared_ptr<TileReplacer> tiles;  // set on the machine every frame (copies of it may hold an older one)
+    // 32X sprite replacements from the same folder, and the recorder that
+    // draws them; the recorder only exists while there is a pack or the
+    // dump is on, so a game without mods does not pay for it. Set on the
+    // machine every frame, like the tiles.
+    std::shared_ptr<const SpritePack> sprite_pack;
+    std::shared_ptr<SpriteRecorder> sprites;
+    // Character mods' colours (Mods/Characters), null without any. Set on the
+    // machine every frame too.
+    std::shared_ptr<CharacterPalettes> character_palettes;
     SDL_AudioStream* audio = nullptr;
     std::vector<SDL_Gamepad*> pads;
     TouchControls touch;
@@ -78,6 +102,7 @@ struct App {
     std::map<SDL_FingerID, uint16_t> fingers;
     bool running = true;
     bool fast_forward = false;
+    FastForwardState ff_state;  // held or toggled (issue #45)
     int overlay_page = 0;
     FrameTiming timing;
     std::vector<uint32_t> watches = {0xFFF000, 0xFFF010};
@@ -109,6 +134,9 @@ struct App {
     ui::Ui ui;
     bool achievements_on = false;
     Menu menu;
+    // Pictures of the game's zones behind the menu (issue #8), made on a
+    // machine of their own and cached in the user data folder.
+    MenuBackdrops backdrops;
     int inject_start = 0;   // frames of Start to hand the game on the way out
     // A stage the front end asked for is taken at the game's mode dispatcher,
     // which the title screen only reaches once it is done with itself: one
@@ -163,9 +191,40 @@ struct App {
     // Touch devices have neither Esc nor a stick to click, so the progress
     // counter doubles as the way in. Empty when it is not being drawn.
     SDL_FRect achievement_tap{0, 0, 0, 0};
-    struct Toast { std::string title, description; Uint64 until_ms = 0; };
+    // Notifications: unlocks, time attack results, save states. `caption` is
+    // the small line above the title.
+    struct Toast {
+        std::string title, description;
+        Uint64 until_ms = 0;
+        std::string caption = "ACHIEVEMENT UNLOCKED";
+    };
     std::vector<Toast> toasts;
+    // Rewind (issue #40): a snapshot every kRewindInterval frames of play,
+    // with the replacement music's place at each (the game does not ask for
+    // music again, so a step back has to put it back too).
+    RewindBuffer rewind;
+    std::map<uint64_t, std::vector<uint8_t>> rewind_music;
+    bool rewinding = false;  // held this pass, and allowed
+    // Save state pad buttons are polled, so a trigger works as well as a
+    // button; these remember last pass, to act on the press only.
+    bool save_button_was = false, load_button_was = false;
+    // --rewind-hold FRAME:PASSES, for testing: rewind held for that many
+    // passes round the main loop from that frame on, as the key would be.
+    struct RewindHold { uint64_t frame = 0; int passes = 0; bool armed = false; } rewind_script;
 };
+
+// Rewind: a snapshot every other frame, so holding rewind goes back at twice
+// the game's speed (each step back shows one frame run from the snapshot).
+// At most a minute of play, and at most 64 MB (32 MB on a phone): a level
+// costs about 12 KB a snapshot, the special stage about 40 KB (measured with
+// chaotix_headless --rewind).
+constexpr int kRewindInterval = 2;
+constexpr size_t kRewindMaxSnapshots = 60 * 60 / kRewindInterval;
+#if defined(SDL_PLATFORM_ANDROID) || defined(SDL_PLATFORM_IOS)
+constexpr size_t kRewindBudget = size_t(32) << 20;
+#else
+constexpr size_t kRewindBudget = size_t(64) << 20;
+#endif
 
 // Looks for a data file shipped with the build: next to the executable, in an
 // "assets" folder beside it, or in the source tree during development.
@@ -231,7 +290,14 @@ std::vector<std::string> rom_search_dirs(const App& app) {
     dirs.push_back(std::filesystem::path(app.store.root()) / "rom");
     // Desktop: the usual download/document folders. Mobile: the app's own
     // documents folder, which is what file managers expose.
-    for (SDL_Folder f : {SDL_FOLDER_DOWNLOADS, SDL_FOLDER_DOCUMENTS, SDL_FOLDER_DESKTOP})
+#ifdef SDL_PLATFORM_IOS
+    // An iOS app's own Downloads and Desktop are folders nobody can reach
+    // (SDL would create them); Documents is the one the Files app shows.
+    const SDL_Folder folders[] = {SDL_FOLDER_DOCUMENTS};
+#else
+    const SDL_Folder folders[] = {SDL_FOLDER_DOWNLOADS, SDL_FOLDER_DOCUMENTS, SDL_FOLDER_DESKTOP};
+#endif
+    for (SDL_Folder f : folders)
         if (const char* p = SDL_GetUserFolder(f)) {
             dirs.push_back(std::filesystem::path(p));
             dirs.push_back(std::filesystem::path(p) / "Chaotix");
@@ -251,7 +317,8 @@ std::vector<std::string> rom_search_dirs(const App& app) {
 // not confused with one of them.
 bool option_takes_value(const std::string& a) {
     static const char* with_value[] = {"--aspect", "--autotest", "--autotest-shot", "--window-size",
-                                       "--press", "--user-dir", "--install", "--menu", "--keys", "--shots", "--hold", "--record-input", "--mods-dir", "--stage"};
+                                       "--press", "--user-dir", "--install", "--menu", "--keys", "--shots", "--hold", "--record-input", "--mods-dir", "--stage",
+                                       "--rewind-hold"};
     for (const char* o : with_value)
         if (a == o) return true;
     return false;
@@ -367,7 +434,7 @@ void draw_toasts(App& app) {
     if (!g.ready()) return;
 
     app.achievement_tap = {0, 0, 0, 0};
-    if (app.touch_enabled && !app.menu.open()) {
+    if (app.achievements_on && app.touch_enabled && !app.menu.open()) {
         char label[32];
         std::snprintf(label, sizeof label, "%d/%zu", app.achievements.unlocked_count(),
                       app.achievements.list().size());
@@ -393,7 +460,7 @@ void draw_toasts(App& app) {
         const SDL_FRect box{g.px(14), ty, toast_w, toast_h};
         g.panel(box, ui::theme::surface_raised, ui::theme::accent, g.px(10), g.px(1.5f));
         g.text_fit(ui::Font::Small, box.x + g.px(14), ty + g.px(7), toast_w - g.px(28),
-                   "ACHIEVEMENT UNLOCKED", ui::theme::accent);
+                   t.caption, ui::theme::accent);
         g.text_fit(ui::Font::Body, box.x + g.px(14), ty + g.px(6) + g.line_height(ui::Font::Small),
                    toast_w - g.px(28), t.title, ui::theme::text);
         ty += toast_h + g.px(8);
@@ -418,7 +485,26 @@ void save_screenshot(App& app) {
 // machine it came from, so the buses are re-pointed afterwards.
 bool return_to_title(App& app) {
     if (!app.title_snapshot) return false;
+    // The save survives the trip back, as the cartridge's battery-backed SRAM
+    // survives turning the console off: the snapshot holds the save as it was
+    // when the game was handed control, and restoring that would undo every
+    // level cleared since -- on screen at once, and on disk as soon as the
+    // game saved again on top of it.
+    std::vector<uint8_t> save(app.m->sram, app.m->sram + sizeof app.m->sram);
+    const bool save_dirty = app.m->sram_dirty;
+    // The recompiled code caches whether SDRAM code matches the ROM by these
+    // counters; the snapshot's are older than ones it has already cached
+    // results at, for other memory, so they go on from here instead.
+    const uint32_t sdram_epoch = app.m->sdram_code_epoch;
+    const uint32_t cache_epoch[2] = {app.m->cache_code_epoch[0], app.m->cache_code_epoch[1]};
     *app.m = *app.title_snapshot;
+    std::copy(save.begin(), save.end(), app.m->sram);
+    app.m->sram_dirty = save_dirty;
+    app.m->sdram_code_epoch = std::max(sdram_epoch, app.m->sdram_code_epoch) + 1;
+    for (int c = 0; c < 2; ++c) app.m->cache_code_epoch[c] = std::max(cache_epoch[c], app.m->cache_code_epoch[c]) + 1;
+    // Rewinding from the title back into the game left behind is not a thing.
+    app.rewind.clear();
+    app.rewind_music.clear();
     // The Start handed over at START GAME may still be in flight; leaving it
     // running would walk the game straight back out of the title.
     app.inject_start = 0;
@@ -429,6 +515,9 @@ bool return_to_title(App& app) {
     app.ta.cancel();
     app.m->remap_m68k();
     app.m->remap_sh2();
+    // The sprite lists described the frame buffers just replaced.
+    app.m->sprites = app.sprites;
+    if (app.sprites) app.sprites->reset();
     app.handed_over = false;
     return true;
 }
@@ -446,6 +535,163 @@ void menu_back(App& app) {
 SDL_GamepadButton menu_pad_button(const App& app) {
     const SDL_GamepadButton b = SDL_GetGamepadButtonFromString(app.cfg.menu_button.c_str());
     return b == SDL_GAMEPAD_BUTTON_INVALID ? SDL_GAMEPAD_BUTTON_LEFT_STICK : b;
+}
+
+// Whether anything bound to fast-forward is down (issue #45): its key, its
+// button on any connected pad (a trigger counts past half way), or the
+// on-screen button. Fast-forward is not a player's, so every pad answers.
+// Whether a host function's gamepad binding (a button name, a trigger, or
+// "none") is down on any pad.
+bool pad_binding_held(const App& app, const std::string& name) {
+    const SDL_GamepadButton b = SDL_GetGamepadButtonFromString(name.c_str());
+    const SDL_GamepadAxis axis = b == SDL_GAMEPAD_BUTTON_INVALID ? SDL_GetGamepadAxisFromString(name.c_str())
+                                                                 : SDL_GAMEPAD_AXIS_INVALID;
+    const bool trigger = axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+    for (SDL_Gamepad* g : app.pads) {
+        if (b != SDL_GAMEPAD_BUTTON_INVALID && SDL_GetGamepadButton(g, b)) return true;
+        if (trigger && SDL_GetGamepadAxis(g, axis) > 16384) return true;
+    }
+    return false;
+}
+
+bool key_binding_held(const std::string& name) {
+    const SDL_Scancode sc = SDL_GetScancodeFromName(name.c_str());
+    return sc != SDL_SCANCODE_UNKNOWN && SDL_GetKeyboardState(nullptr)[sc];
+}
+
+// Whether a key event is the bound key. By its scancode, or by its key code
+// for an event that carries none (--keys pushes those).
+bool key_binding_is(const std::string& name, const SDL_KeyboardEvent& k) {
+    const SDL_Scancode bound = SDL_GetScancodeFromName(name.c_str());
+    if (bound == SDL_SCANCODE_UNKNOWN) return false;
+    if (k.scancode != SDL_SCANCODE_UNKNOWN) return k.scancode == bound;
+    return k.key == SDL_GetKeyFromScancode(bound, SDL_KMOD_NONE, false);
+}
+
+bool fast_forward_held(const App& app, uint16_t touch_held) {
+    if (touch_held & TOUCH_FAST_FORWARD) return true;
+    return key_binding_held(app.cfg.ff_key) || pad_binding_held(app, app.cfg.ff_button);
+}
+
+// Rewind (issue #40): its key, its pad button or the on-screen button.
+bool rewind_held(const App& app, uint16_t touch_held) {
+    if (touch_held & TOUCH_REWIND) return true;
+    return key_binding_held(app.cfg.rewind_key) || pad_binding_held(app, app.cfg.rewind_button);
+}
+
+// ---------------------------------------------------------------------------
+// Save states (issue #40). Files in <user data>/States, one per slot and ROM.
+// ---------------------------------------------------------------------------
+std::string state_path(const App& app, int slot) {
+    return app.store.root() + "States/chaotix_" + app.m->rom.sha1.substr(0, 8) + "_" + std::to_string(slot) + ".state";
+}
+
+// Why states and rewind cannot be used now, or empty when they can. Never in
+// a TIME ATTACK run: a record is set in one go, at the game's own speed.
+std::string states_locked(const App& app) {
+    if (app.ta.running) return "NOT IN TIME ATTACK";
+    if (!app.handed_over) return "START THE GAME FIRST";
+    if (app.stage_kick >= 0) return "THE STAGE IS STARTING";
+    return "";
+}
+
+void notice(App& app, const std::string& caption, const std::string& title, const std::string& note = "") {
+    // One at a time: a row of SAVED from pressing it repeatedly is noise.
+    app.toasts.erase(std::remove_if(app.toasts.begin(), app.toasts.end(),
+                                    [&](const App::Toast& t) { return t.caption == caption; }),
+                     app.toasts.end());
+    app.toasts.push_back({title, note, SDL_GetTicks() + 2500, caption});
+}
+
+void save_state(App& app, int slot) {
+    const std::string why = states_locked(app);
+    if (!why.empty()) { notice(app, "SAVE STATE", why); return; }
+    const std::vector<uint8_t> bytes = savestate::save(*app.m, app.music.save_position(), int64_t(std::time(nullptr)));
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::u8path(app.store.root() + "States"), ec);
+    const std::string path = state_path(app, slot);
+    if (!savestate::write_file(path, bytes)) {
+        LOGW("state", "cannot write %s", path.c_str());
+        notice(app, "SAVE STATE", "STATE " + std::to_string(slot) + " NOT SAVED", "The file could not be written.");
+        return;
+    }
+    LOGI("state", "slot %d saved at frame %llu to %s (%zu bytes)", slot, (unsigned long long)app.m->frame_count,
+         path.c_str(), bytes.size());
+    notice(app, "SAVE STATE", "STATE " + std::to_string(slot) + " SAVED");
+}
+
+// After the machine jumped in time (a state loaded): what the host keeps
+// about the moment before no longer applies.
+void after_time_jump(App& app) {
+    app.inject_start = 0;
+    app.m->audio_out.clear();
+    if (app.audio) SDL_ClearAudioStream(app.audio);
+    app.achievements.forget_previous();
+}
+
+void load_state(App& app, int slot) {
+    const std::string why = states_locked(app);
+    if (!why.empty()) { notice(app, "LOAD STATE", why); return; }
+    std::vector<uint8_t> bytes;
+    const std::string name = "STATE " + std::to_string(slot);
+    if (!savestate::read_file(state_path(app, slot), bytes)) { notice(app, "LOAD STATE", name + " IS EMPTY"); return; }
+    std::string err;
+    std::vector<uint8_t> host;
+    if (!savestate::load(*app.m, bytes, &err, &host)) {
+        LOGW("state", "slot %d: %s", slot, err.c_str());
+        // The menu's font has capitals only.
+        for (char& ch : err) ch = char(std::toupper(static_cast<unsigned char>(ch)));
+        notice(app, "LOAD STATE", name + " NOT LOADED", err);
+        return;
+    }
+    app.music.load_position(host);
+    app.rewind.clear();
+    app.rewind_music.clear();
+    after_time_jump(app);
+    LOGI("state", "slot %d loaded (frame %llu)", slot, (unsigned long long)app.m->frame_count);
+    notice(app, "LOAD STATE", name + " LOADED");
+}
+
+// What a slot holds, for the menu.
+std::string state_info(const App& app, int slot) {
+    std::vector<uint8_t> bytes;
+    if (!savestate::read_file(state_path(app, slot), bytes)) return "EMPTY";
+    savestate::Info info;
+    std::string err;
+    if (!savestate::read_info(bytes, info, &err)) return "UNREADABLE";
+    if (info.game_version != savestate::game_version()) return "FROM VERSION " + info.game_version;
+    if (!info.saved_unix) return "SAVED";
+    const std::time_t t = std::time_t(info.saved_unix);
+    char buf[32];
+    if (const std::tm* tm = std::localtime(&t)) std::strftime(buf, sizeof buf, "SAVED %Y-%m-%d %H:%M", tm);
+    else std::snprintf(buf, sizeof buf, "SAVED");
+    return buf;
+}
+
+// One step back through the rewind buffer, and a frame run from there for a
+// picture, with the pad let go and the sound dropped. The game then carries
+// on from that frame when rewind is let go.
+void rewind_step(App& app) {
+    // Nothing to go back to (just after a load, say): the game holds still
+    // rather than running on with the pad let go.
+    if (!app.rewind.snapshots()) return;
+    app.rewind.step_back(*app.m);
+    auto it = app.rewind_music.find(app.m->frame_count);
+    if (it != app.rewind_music.end()) app.music.load_position(it->second);
+    app.achievements.forget_previous();
+    app.m->input.pad[0] = app.m->input.pad[1] = 0;
+    app.m->run_frame();
+    app.m->audio_out.clear();
+    app.m->music_events.clear();
+}
+
+void rewind_push(App& app) {
+    app.rewind.set_budget(kRewindBudget);
+    app.rewind.set_max_snapshots(kRewindMaxSnapshots);
+    app.rewind.push(*app.m);
+    app.rewind_music[app.m->frame_count] = app.music.save_position();
+    const uint64_t oldest = app.rewind.oldest_frame();
+    app.rewind_music.erase(app.rewind_music.begin(), app.rewind_music.lower_bound(oldest));
 }
 
 // A stage the front end asked for is taken at the game's mode dispatcher, and
@@ -518,7 +764,7 @@ void follow_time_attack(App& app) {
                              : cheated ? "Cheats were on: not recorded."
                              : best   ? "A new best for this stage."
                                       : "Not a new best.";
-    app.toasts.push_back({title, note, SDL_GetTicks() + 6000});
+    app.toasts.push_back({title, note, SDL_GetTicks() + 6000, "TIME ATTACK"});
     // The run, as it was played. A recorded time that disagrees with what the
     // game showed can then be looked into without anyone having had to set up
     // a recording beforehand.
@@ -536,6 +782,15 @@ void handle_key(App& app, const SDL_KeyboardEvent& k) {
     // An open menu owns the keyboard, so the function keys below cannot be
     // triggered from underneath it.
     if (app.menu.on_key(k.key)) return;
+    // Save states (issue #40), on keys of the player's choosing, so they come
+    // before the fixed function keys below.
+    if (key_binding_is(app.cfg.state_save_key, k)) { save_state(app, app.cfg.state_slot); return; }
+    if (key_binding_is(app.cfg.state_load_key, k)) { load_state(app, app.cfg.state_slot); return; }
+    if (key_binding_is(app.cfg.state_slot_key, k)) {
+        app.cfg.state_slot = app.cfg.state_slot % kStateSlots + 1;
+        notice(app, "SAVE STATE", "SLOT " + std::to_string(app.cfg.state_slot), state_info(app, app.cfg.state_slot));
+        return;
+    }
     switch (k.key) {
     case SDLK_ESCAPE: menu_back(app); break;
     case SDLK_F1: app.cfg.debug_overlay = !app.cfg.debug_overlay; break;
@@ -651,6 +906,8 @@ void load_touch_skin(App& app, const std::string& dir) {
             std::fputs("Touch control images. Put BMP files here (32-bit keeps transparency):\n"
                        "  dpad.bmp a.bmp b.bmp c.bmp x.bmp y.bmp z.bmp start.bmp\n"
                        "  stick.bmp and knob.bmp for the joystick (OPTIONS > INPUT > TOUCH STICK).\n"
+                       "  ff.bmp for fast-forward (OPTIONS > INPUT > TOUCH FAST FORWARD).\n"
+                       "  rew.bmp for rewind (OPTIONS > INPUT > TOUCH REWIND).\n"
                        "  button.bmp is used for any face button without its own file.\n"
                        "  <name>_pressed.bmp is drawn while that button is held.\n"
                        "Each image is stretched to the button's square; a missing one is drawn as before.\n",
@@ -659,7 +916,7 @@ void load_touch_skin(App& app, const std::string& dir) {
         }
     }
     int loaded = 0;
-    for (const char* name : {"dpad", "stick", "knob", "a", "b", "c", "x", "y", "z", "start", "button"}) {
+    for (const char* name : {"dpad", "stick", "knob", "a", "b", "c", "x", "y", "z", "start", "ff", "rew", "button"}) {
         for (int pressed = 0; pressed < 2; ++pressed) {
             const std::string path = dir + "/" + name + (pressed ? "_pressed" : "") + ".bmp";
             SDL_Surface* s = SDL_LoadBMP(path.c_str());
@@ -673,6 +930,135 @@ void load_touch_skin(App& app, const std::string& dir) {
         }
     }
     if (loaded) LOGI("touch", "%d touch control image(s) from %s", loaded, dir.c_str());
+}
+
+// Puts the 32X sprite recorder on the machine when it is needed (a sprite
+// pack, or the dump on) and takes it off when not: recording costs a little
+// every frame. Called every frame, as a copy of the machine put back (the
+// title snapshot) may carry another one.
+void update_sprite_recorder(App& app) {
+    const bool want = app.sprite_pack || app.cfg.dump_graphics;
+    if (!want) app.sprites.reset();
+    else if (!app.sprites) app.sprites = std::make_shared<SpriteRecorder>();
+    if (app.sprites) {
+        app.sprites->set_pack(app.sprite_pack);
+        app.sprites->dumping = app.cfg.dump_graphics;
+    }
+    if (app.m->sprites != app.sprites) app.m->sprites = app.sprites;
+}
+
+// Graphics replacements (issue #35), in Mods/Textures: Mega Drive tiles as
+// md_<hash>.png and 32X sprites as 32x_<bank>_<frame>.png or 32x_<hash>.png.
+// With DUMP GRAPHICS on, each one drawn is also written to Mods/Textures/Dump
+// once.
+void load_tiles(App& app) {
+    const std::string dir = mods_root(app) + "Textures";
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
+    const std::string readme = dir + "/README.txt";
+    // Written when missing, and over the text of older versions: the first
+    // knew only the tiles, the next not the text patterns, the next not the
+    // sprite text.
+    bool write_readme = !std::filesystem::exists(std::filesystem::u8path(readme), ec);
+    if (!write_readme) {
+        if (FILE* f = std::fopen(readme.c_str(), "r")) {
+            char first[64] = {};
+            if (std::fgets(first, sizeof first, f)) {
+                write_readme = std::strncmp(first, "Mega Drive tile replacements:", 29) == 0;
+                if (std::strncmp(first, "Graphics replacements.", 22) == 0) {
+                    bool knows_text = false;
+                    char line[256];
+                    while (!knows_text && std::fgets(line, sizeof line, f)) knows_text = std::strstr(line, "mdsprite_") != nullptr;
+                    write_readme = !knows_text;
+                }
+            }
+            std::fclose(f);
+        }
+    }
+    if (write_readme) {
+        if (FILE* f = std::fopen(readme.c_str(), "w")) {
+            std::fputs("Graphics replacements. Turn on OPTIONS > EXTRAS > DUMP GRAPHICS and play: each\n"
+                       "graphic the game draws is saved once to the Dump folder. Edit one in an editor\n"
+                       "that keeps it palette-indexed (the colours are the game's palette, index 0 is\n"
+                       "transparent) and put it in this folder under the same name. It is drawn instead\n"
+                       "of the original wherever the game uses it.\n"
+                       "\n"
+                       "md_<hash>.png: Mega Drive tiles (backgrounds, level art). Keep them 8x8.\n"
+                       "mdtext_<name>.txt with mdtext_<name>.png: Mega Drive text by tile sequence\n"
+                       "(menus written with letter tiles). The dump lists the runs of tiles on screen\n"
+                       "in Dump/Text, with a numbered picture; copy a run's \"plane\" and \"row\" lines\n"
+                       "into the .txt and draw the .png, 8 pixels high per row (docs/TEXTURE_MODS.md).\n"
+                       "mdsprite_<name>.txt with mdsprite_<name>.png: the same for text drawn with\n"
+                       "Mega Drive sprites (the menu banners' letters): Dump/Text/sprites_<n>.txt\n"
+                       "lists the sprites on screen in groups; copy a group's \"sprite\" lines.\n"
+                       "32x_<bank>_<frame>.png, 32x_<hash>.png: 32X sprites (characters, the HUD,\n"
+                       "objects, the title). The image's top-left corner stays where the original's\n"
+                       "was; another size is drawn at its own size from there. The colour offsets the\n"
+                       "game gives the characters still apply, so keep to the indices the dump uses.\n"
+                       "\n"
+                       "32x_<bank>.png with 32x_<bank>.txt: every frame of a bank in one sheet.\n"
+                       "OPTIONS > EXTRAS > EXPORT SPRITES writes the characters' sheets to the Sheets\n"
+                       "folder; copy a sheet and its .txt here to use it. A frame's own file wins.\n",
+                       f);
+            std::fclose(f);
+        }
+    }
+    auto tiles = std::make_shared<TileReplacer>();
+    std::vector<std::string> messages;
+    const int n = load_tile_pack(*tiles, dir, &messages);
+    for (const auto& m : messages) LOGW("tiles", "%s", m.c_str());
+    if (n) LOGI("tiles", "%d tile replacement(s) from %s", n, dir.c_str());
+    messages.clear();
+    const int tn = load_text_pack(*tiles, dir, &messages);
+    for (const auto& m : messages) LOGW("text", "%s", m.c_str());
+    if (tn) LOGI("text", "%d text pattern(s) from %s", tn, dir.c_str());
+    tiles->dumping = app.cfg.dump_graphics;
+    app.tiles_dir = dir;
+    app.tiles = tiles;
+    app.m->vdp.tiles = tiles;
+
+    auto pack = std::make_shared<SpritePack>();
+    messages.clear();
+    const int sn = load_sprite_pack(*pack, dir, &messages);
+    for (const auto& m : messages) LOGW("sprites", "%s", m.c_str());
+    if (sn) LOGI("sprites", "%d sprite replacement(s) from %s", sn, dir.c_str());
+    app.sprite_pack = sn ? pack : nullptr;
+    update_sprite_recorder(app);
+}
+
+// Character mods (docs/CHARACTER_MODS.md): Mods/Characters/<name>.ini, read
+// both for their colours (load_mods) and their stats (apply_rom_patches).
+std::vector<CharacterMod> read_character_mods(App& app) {
+    const std::string dir = mods_root(app) + "Characters";
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
+    const std::string readme = dir + "/README.txt";
+    if (!std::filesystem::exists(std::filesystem::u8path(readme), ec)) {
+        if (FILE* f = std::fopen(readme.c_str(), "w")) {
+            std::fputs("Character mods. One file per character, named mighty.ini, knuckles.ini,\n"
+                       "charmy.ini, vector.ini, bomb.ini, heavy.ini or espio.ini, with any of:\n"
+                       "\n"
+                       "[Palette]      the character's 18 colours, by pixel value (1 to 18):\n"
+                       "1 = #RRGGBB    rounded to the 32X's 32 levels per component, or a 32X\n"
+                       "               colour as stored (0x0000-0x7FFF, blue-green-red, 5 bits each).\n"
+                       "[Cycle]        Espio only: his 16 shimmer sets, five colours each\n"
+                       "0 = #RRGGBB #RRGGBB #RRGGBB #RRGGBB #RRGGBB   (for pixels 2 to 6)\n"
+                       "[Stats]        how the character moves, in the game's own units:\n"
+                       "acceleration = 0x0C   speed_cap, deceleration, gravity, jump, jump_release,\n"
+                       "               roll_friction, spin_dash_min/max/step, glide_speed, glide_fall_speed,\n"
+                       "               air_dash_speed, ... (see docs/CHARACTER_MODS.md)\n"
+                       "\n"
+                       "Colours change only the picture. Stats change how the game plays and take\n"
+                       "effect the next time the game is started. Lines starting with ; are comments.\n"
+                       "New looks for the sprites themselves go in Mods/Textures.\n",
+                       f);
+            std::fclose(f);
+        }
+    }
+    std::vector<std::string> messages;
+    std::vector<CharacterMod> mods = load_character_mods(dir, &messages);
+    for (const auto& msg : messages) LOGW("characters", "%s", msg.c_str());
+    return mods;
 }
 
 // Music and touch images from the Mods folder; again when that folder has
@@ -692,20 +1078,77 @@ void load_mods(App& app) {
     if (const int n = app.music.scan(music_dir)) LOGI("music", "%d piece(s) of music replaced from %s", n, music_dir.c_str());
     app.music.attach(*app.m);
     load_touch_skin(app, mods + "Touch");
+    load_tiles(app);
+    // The characters' colours, from the ROM as it runs (patched or not).
+    auto palettes = std::make_shared<CharacterPalettes>(app.m->rom, read_character_mods(app));
+    app.character_palettes = palettes->empty() ? nullptr : palettes;
+    app.m->characters = app.character_palettes;
+    if (app.character_palettes) LOGI("characters", "character colours from %sCharacters", mods.c_str());
     LOGI("app", "mods folder: %s", mods.c_str());
+}
+
+// ROM patches (issue #35): IPS and BPS files in Mods/Patches, applied in name
+// order to the ROM in memory before the game starts. The user's ROM file is
+// never changed.
+void apply_rom_patches(App& app) {
+    const std::string dir = mods_root(app) + "Patches";
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
+    const std::string readme = dir + "/README.txt";
+    if (!std::filesystem::exists(std::filesystem::u8path(readme), ec)) {
+        if (FILE* f = std::fopen(readme.c_str(), "w")) {
+            std::fputs("ROM patches. Put .ips or .bps files here; they are applied in name order\n"
+                       "to the ROM in memory when the game starts (your ROM file is not changed).\n"
+                       "Patches must be made for Knuckles' Chaotix (Japan, USA),\n"
+                       "SHA-1 0c2fff7bc79ed26507c08ac47464c3af19f7ced7.\n"
+                       "Graphics, palettes and other data are fine. A patch that changes the game's\n"
+                       "code works too, but that code then runs in the slower interpreter.\n",
+                       f);
+            std::fclose(f);
+        }
+    }
+    std::vector<std::string> files;
+    for (const auto& e : std::filesystem::directory_iterator(std::filesystem::u8path(dir), ec)) {
+        std::string ext = e.path().extension().u8string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) { return char(std::tolower(ch)); });
+        if (e.is_regular_file(ec) && (ext == ".ips" || ext == ".bps")) files.push_back(e.path().u8string());
+    }
+    if (!files.empty()) {
+        std::sort(files.begin(), files.end());
+        std::vector<std::string> messages;
+        const int applied = app.m->rom.apply_patches(files, &messages);
+        for (const auto& msg : messages) LOGI("patch", "%s", msg.c_str());
+        if (applied)
+            LOGI("patch", "%d patch(es) applied: %zu changed range(s), patched ROM sha1 %s", applied,
+                 app.m->rom.patched.size(), app.m->rom.patched_sha1.c_str());
+    }
+    // Character mods' stats are a data patch too, over the patch files' result,
+    // and like them only read here, before the game starts.
+    std::vector<std::string> messages;
+    const std::vector<CharacterMod> mods = read_character_mods(app);
+    const int changed = app.m->rom.apply_edits(stat_edits(app.m->rom, mods, &messages), &messages);
+    for (const auto& msg : messages) LOGI("characters", "%s", msg.c_str());
+    if (changed) LOGI("characters", "character stats: %d byte(s) of the movement table changed", changed);
 }
 
 // The image for a button, if the skin has one.
 SDL_Texture* touch_image(const App& app, const TouchButton& b, bool on) {
     std::string name = b.is_dpad ? "dpad" : b.label;
     std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) { return char(std::tolower(ch)); });
-    for (const std::string& n : {name, std::string(b.is_dpad || name == "start" ? "" : "button")}) {
+    for (const std::string& n : {name, std::string(b.is_dpad || name == "start" || name == "ff" || name == "rew" ? "" : "button")}) {
         auto it = app.touch_skin.find(n);
         if (n.empty() || it == app.touch_skin.end()) continue;
         if (on && it->second[1]) return it->second[1];
         if (it->second[0]) return it->second[0];
     }
     return nullptr;
+}
+
+// How opaque a touch control is drawn (issue #33): OPTIONS > INPUT sets it
+// for buttons at rest and held, as a percentage of `full`.
+Uint8 touch_alpha(const App& app, bool held, int full) {
+    const int pct = std::clamp(held ? app.cfg.touch_pressed_opacity : app.cfg.touch_opacity, 0, 100);
+    return Uint8(full * pct / 100);
 }
 
 void fill_circle(SDL_Renderer* r, float cx, float cy, float radius, SDL_FColor c) {
@@ -735,23 +1178,58 @@ void draw_touch_stick(App& app, const TouchButton& b) {
     const float kx = b.cx + app.touch.knob_dx(), ky = b.cy + app.touch.knob_dy();
     const float kr = b.r * 0.45f;
     if (SDL_Texture* img = image("stick")) {
-        SDL_SetTextureAlphaMod(img, on ? 255 : 170);
+        SDL_SetTextureAlphaMod(img, touch_alpha(app, on, 255));
         const SDL_FRect dst{b.cx - b.r, b.cy - b.r, b.r * 2, b.r * 2};
         SDL_RenderTexture(app.renderer, img, nullptr, &dst);
     } else {
-        fill_circle(app.renderer, b.cx, b.cy, b.r, {1, 1, 1, on ? 0.25f : 0.14f});
+        fill_circle(app.renderer, b.cx, b.cy, b.r, {1, 1, 1, touch_alpha(app, on, 64) / 255.0f});
     }
     if (SDL_Texture* img = image("knob")) {
-        SDL_SetTextureAlphaMod(img, on ? 255 : 170);
+        SDL_SetTextureAlphaMod(img, touch_alpha(app, on, 255));
         const SDL_FRect dst{kx - kr, ky - kr, kr * 2, kr * 2};
         SDL_RenderTexture(app.renderer, img, nullptr, &dst);
     } else {
-        fill_circle(app.renderer, kx, ky, kr, {1, 1, 1, on ? 0.55f : 0.32f});
+        fill_circle(app.renderer, kx, ky, kr, {1, 1, 1, touch_alpha(app, on, 140) / 255.0f});
     }
 }
 
+// The band between radii r0 and r1, for the buttons' rims.
+void fill_ring(SDL_Renderer* r, float cx, float cy, float r0, float r1, SDL_FColor c) {
+    constexpr int kSteps = 40;
+    SDL_Vertex v[kSteps * 2];
+    int idx[kSteps * 6];
+    for (int i = 0; i < kSteps; ++i) {
+        const float a = float(i) * 2.0f * SDL_PI_F / float(kSteps);
+        const float ca = std::cos(a), sa = std::sin(a);
+        v[i * 2] = {{cx + ca * r1, cy + sa * r1}, c, {0, 0}};
+        v[i * 2 + 1] = {{cx + ca * r0, cy + sa * r0}, c, {0, 0}};
+        const int j = (i + 1) % kSteps;
+        const int quad[6] = {i * 2, i * 2 + 1, j * 2, j * 2, i * 2 + 1, j * 2 + 1};
+        for (int k = 0; k < 6; ++k) idx[i * 6 + k] = quad[k];
+    }
+    SDL_RenderGeometry(r, nullptr, v, kSteps * 2, idx, kSteps * 6);
+}
+
+// An arrow head pointing along (dx, dy), centred on (cx, cy).
+void fill_arrow(SDL_Renderer* r, float cx, float cy, float dx, float dy, float size, SDL_FColor c) {
+    const float px = -dy, py = dx;  // across the arrow
+    SDL_Vertex v[3] = {
+        {{cx + dx * size, cy + dy * size}, c, {0, 0}},
+        {{cx - dx * size * 0.6f + px * size, cy - dy * size * 0.6f + py * size}, c, {0, 0}},
+        {{cx - dx * size * 0.6f - px * size, cy - dy * size * 0.6f - py * size}, c, {0, 0}},
+    };
+    SDL_RenderGeometry(r, nullptr, v, 3, nullptr, 0);
+}
+
+// The drawn controls, when no image replaces them (issue #8): round buttons
+// with a rim and the letter in the menu's pixel face, and a d-pad on a round
+// base with an arrow per direction, each lit while held. Everything follows
+// TOUCH OPACITY and PRESSED OPACITY.
 void draw_touch_controls(App& app, uint16_t held) {
     SDL_SetRenderDrawBlendMode(app.renderer, SDL_BLENDMODE_BLEND);
+    auto colour = [&app](float r, float g, float b, bool on, int full) {
+        return SDL_FColor{r, g, b, float(touch_alpha(app, on, full)) / 255.0f};
+    };
     for (const auto& b : app.touch.buttons()) {
         if (b.is_dpad && app.touch.stick()) {
             draw_touch_stick(app, b);
@@ -760,22 +1238,49 @@ void draw_touch_controls(App& app, uint16_t held) {
         bool on = b.is_dpad ? (held & (PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT)) != 0 : (held & b.mask) != 0;
         if (SDL_Texture* img = touch_image(app, b, on)) {
             // Without a pressed image, a held button is drawn brighter.
-            SDL_SetTextureAlphaMod(img, on ? 255 : 170);
+            SDL_SetTextureAlphaMod(img, touch_alpha(app, on, 255));
             const SDL_FRect dst{b.cx - b.r, b.cy - b.r, b.r * 2, b.r * 2};
             SDL_RenderTexture(app.renderer, img, nullptr, &dst);
             continue;
         }
-        SDL_SetRenderDrawColor(app.renderer, 255, 255, 255, on ? 110 : 55);
-        // Approximate circles with a filled square plus cross for the d-pad.
-        SDL_FRect r{b.cx - b.r * 0.7f, b.cy - b.r * 0.7f, b.r * 1.4f, b.r * 1.4f};
         if (b.is_dpad) {
-            SDL_FRect h{b.cx - b.r, b.cy - b.r * 0.33f, b.r * 2, b.r * 0.66f};
-            SDL_FRect v{b.cx - b.r * 0.33f, b.cy - b.r, b.r * 0.66f, b.r * 2};
+            fill_circle(app.renderer, b.cx, b.cy, b.r, colour(0.05f, 0.06f, 0.10f, false, 120));
+            fill_ring(app.renderer, b.cx, b.cy, b.r * 0.93f, b.r, colour(1, 1, 1, false, 150));
+            const float arm = b.r * 0.30f, len = b.r * 0.82f;
+            const SDL_FRect h{b.cx - len, b.cy - arm, len * 2, arm * 2};
+            const SDL_FRect v{b.cx - arm, b.cy - len, arm * 2, len * 2};
+            SDL_SetRenderDrawColor(app.renderer, 210, 218, 235, touch_alpha(app, false, 70));
             SDL_RenderFillRect(app.renderer, &h);
             SDL_RenderFillRect(app.renderer, &v);
+            const struct { uint16_t mask; float dx, dy; } dirs[4] = {
+                {PAD_UP, 0, -1}, {PAD_DOWN, 0, 1}, {PAD_LEFT, -1, 0}, {PAD_RIGHT, 1, 0}};
+            for (const auto& d : dirs) {
+                const bool lit = (held & d.mask) != 0;
+                fill_arrow(app.renderer, b.cx + d.dx * len * 0.62f, b.cy + d.dy * len * 0.62f, d.dx, d.dy, arm * 0.75f,
+                           lit ? colour(0.38f, 0.60f, 1.0f, true, 255) : colour(1, 1, 1, false, 220));
+            }
+            continue;
+        }
+        fill_circle(app.renderer, b.cx, b.cy, b.r,
+                    on ? colour(0.38f, 0.60f, 1.0f, true, 150) : colour(0.05f, 0.06f, 0.10f, false, 120));
+        fill_ring(app.renderer, b.cx, b.cy, b.r * 0.88f, b.r, colour(1, 1, 1, on, 220));
+        if (b.mask == TOUCH_FAST_FORWARD) {
+            // The usual fast-forward sign, two arrow heads, for a label.
+            const float s = b.r * 0.32f;
+            fill_arrow(app.renderer, b.cx - s, b.cy, 1, 0, s, colour(1, 1, 1, on, 255));
+            fill_arrow(app.renderer, b.cx + s * 0.6f, b.cy, 1, 0, s, colour(1, 1, 1, on, 255));
+        } else if (b.mask == TOUCH_REWIND) {
+            // And rewind's, the same pointing back.
+            const float s = b.r * 0.32f;
+            fill_arrow(app.renderer, b.cx + s, b.cy, -1, 0, s, colour(1, 1, 1, on, 255));
+            fill_arrow(app.renderer, b.cx - s * 0.6f, b.cy, -1, 0, s, colour(1, 1, 1, on, 255));
+        } else if (app.ui.ready()) {
+            const ui::Font f = ui::Font::Pixel;
+            const std::string label = b.label;
+            const float w = app.ui.text_width(f, label), lh = app.ui.line_height(f);
+            app.ui.text(f, b.cx - w * 0.5f, b.cy - lh * 0.5f, label, ui::Color{255, 255, 255, touch_alpha(app, on, 255)});
         } else {
-            SDL_RenderFillRect(app.renderer, &r);
-            SDL_SetRenderDrawColor(app.renderer, 0, 0, 0, 200);
+            SDL_SetRenderDrawColor(app.renderer, 255, 255, 255, touch_alpha(app, on, 255));
             SDL_RenderDebugText(app.renderer, b.cx - 4.0f * float(SDL_strlen(b.label)), b.cy - 4, b.label);
         }
     }
@@ -801,6 +1306,12 @@ int main(int argc, char** argv) {
         else if (a == "--install" && i + 1 < argc) install_path = argv[++i];
     }
     if (!user_dir.empty() && user_dir.back() != '/' && user_dir.back() != '\\') user_dir += '/';
+#ifdef SDL_PLATFORM_IOS
+    // iOS: the app's Documents, which the Files app and Finder show (the
+    // Info.plist shares it), so the ROM, saves, settings and Mods are there.
+    if (user_dir.empty())
+        if (const char* documents = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS)) user_dir = documents;
+#endif
     if (user_dir.empty()) {
         char* pref = SDL_GetPrefPath("ChaotixRecompiled", "ChaotixRecompiled");
         user_dir = pref ? pref : "./";
@@ -901,6 +1412,10 @@ int main(int argc, char** argv) {
                 app.cli_stage.combi = uint16_t(cc);
                 app.cli_stage.two_players = two != 0;
             }
+        } else if (a == "--rewind-hold" && i + 1 < argc) {
+            unsigned long long f = 0;
+            int passes = 0;
+            if (std::sscanf(argv[++i], "%llu:%d", &f, &passes) == 2) app.rewind_script = {uint64_t(f), passes, false};
         } else if (a == "--log-timing") {
             app.log_timing = true;
         } else if ((a == "--press" || a == "--hold") && i + 1 < argc) {
@@ -971,6 +1486,8 @@ int main(int argc, char** argv) {
             app.m->stage_request = r;
             app.m->stage_pending = true;
             app.handed_over = true;
+            app.rewind.clear();
+            app.rewind_music.clear();
             // Tapping Start until the request is taken, rather than one press:
             // a single one only gets the title past its own animation, and the
             // stage would then wait out the whole title screen (about eight
@@ -1015,6 +1532,21 @@ int main(int argc, char** argv) {
             std::error_code ec;
             std::filesystem::remove(achievements_progress_path(app), ec);
         };
+        hooks.export_sprites = [&app] {
+            // The characters' banks come from the ROM, so this works from the
+            // front end without playing; the banks the scene behind has
+            // loaded come along too.
+            if (!app.m) return;
+            const std::string dir = mods_root(app) + "Textures/Sheets";
+            std::vector<std::string> messages;
+            const int n = export_sprite_sheets(*app.m, dir, &messages);
+            for (const auto& msg : messages) LOGI("sprites", "%s", msg.c_str());
+            LOGI("sprites", "%d sprite sheet(s) exported to %s", n, dir.c_str());
+        };
+        hooks.save_state = [&app](int slot) { save_state(app, slot); };
+        hooks.load_state = [&app](int slot) { load_state(app, slot); };
+        hooks.state_info = [&app](int slot) { return app.m ? state_info(app, slot) : std::string(); };
+        hooks.states_locked = [&app] { return app.m ? states_locked(app) : std::string(); };
         app.start_stage = hooks.start_stage;
         app.menu.set_hooks(std::move(hooks));
     }
@@ -1065,12 +1597,36 @@ int main(int argc, char** argv) {
     app.m->input.six_button[0] = app.cfg.six_button;
     app.m->input.six_button[1] = app.cfg.six_button;
     warn_about_dead_bindings(app);
+    if (!app.autotest_frames || !app.mods_dir.empty()) apply_rom_patches(app);  // autotests are hermetic unless asked
+    // TIME ATTACK offers the characters by the names the ROM gives them.
+    app.menu.set_character_names(stage_select::character_names(app.m->rom));
     app.m->reset();
     if (!app.autotest_frames) app.store.load_sram(*app.m);  // autotests are hermetic
     RecompStatus rs = install_recompiled_code(*app.m, app.cfg.use_recompiled && !force_interp);
     LOGI("app", "execution: %s", rs.description.c_str());
     if (!app.autotest_frames || !app.mods_dir.empty()) {  // autotests are hermetic unless asked
         load_mods(app);
+    }
+    // Issue #8: the menu's art comes from the ROM being played, after any
+    // patches: its font now (a millisecond), its zone pictures from the cache
+    // or, the first time, from a machine of their own in the background.
+    if (app.ui.ready()) {
+        GameFont font;
+        std::string why;
+        if (build_game_font(app.m->rom.data, font, &why)) app.ui.set_game_font(font);
+        else LOGW("menu", "the game's font: %s; the menu keeps the pixel face", why.c_str());
+    }
+    app.backdrops.configure(app.m->rom, app.store.root() + "Cache/Backdrops/");
+    app.backdrops.choose(app.cfg.menu_backdrop_zone());
+    if (app.autotest_frames && app.cfg.menu_backdrop_on() && app.ui.ready()) {
+        // A screenshot of the menu should show what a player sees once the
+        // picture exists, not the plain look of the first seconds.
+        const Uint64 give_up = SDL_GetTicks() + 60000;
+        MenuBackdrops::Shown shown;
+        while (!app.backdrops.current(shown) && SDL_GetTicks() < give_up) {
+            app.backdrops.update(app.renderer, true, true);
+            SDL_Delay(20);
+        }
     }
 
     if (app.cfg.achievements) {
@@ -1131,6 +1687,9 @@ int main(int argc, char** argv) {
     while (app.running) {
         // The menu is where settings change: keep them the moment it closes.
         if (menu_was_open && !app.menu.open()) save_now(app);
+        // Each time the menu opens it shows the next zone (MENU BACKGROUND on
+        // CYCLE; a chosen zone stays).
+        if (!menu_was_open && app.menu.open()) app.backdrops.advance();
         menu_was_open = app.menu.open();
         // Wait before polling input so it is fresh when the frame is run.
         // Rendering an unchanged frame here can block in VSync and leave the
@@ -1138,8 +1697,10 @@ int main(int argc, char** argv) {
         // than the monitor refresh rate, remains the simulation clock.
         // Use the previous pass's fast-forward state; a Tab transition takes
         // effect when events are polled below, within at most one game frame.
+        // Only MAX is unthrottled: 2X and 4X keep the normal pacing and run
+        // more frames per period instead.
         uint64_t now = pace_frame(accumulator, last, frame_ticks, freq,
-            app.fast_forward || app.autotest_frames != 0,
+            (app.fast_forward && app.cfg.ff_speed == FastForwardSpeed::Max) || app.autotest_frames != 0,
             [] { return SDL_GetPerformanceCounter(); },
             [](uint64_t ns) { SDL_DelayPrecise(ns); });
         SDL_Event e;
@@ -1194,14 +1755,48 @@ int main(int argc, char** argv) {
             default: break;
             }
         }
-        const bool* ks = SDL_GetKeyboardState(nullptr);
-        app.fast_forward = ks[SDL_SCANCODE_TAB];
-
         // Unified input: keyboard | gamepads | touch -> InputState. While the
         // menu is open it takes the controls, so driving it does not also move
         // the character.
         uint16_t touch_held = 0;
         for (const auto& [id, b] : app.fingers) touch_held |= b;
+        // Fast-forward (issue #45) is never on during a time attack run, so a
+        // record is set at the game's own speed, nor under the menu.
+        app.fast_forward = app.ff_state.update(fast_forward_held(app, touch_held), app.cfg.ff_mode,
+                                               app.ta.running || app.menu.open());
+        // Rewind (issue #40): never in a time attack run, nor under the menu.
+        // Turned off, its memory goes back.
+        if (!app.cfg.rewind && app.rewind.snapshots()) {
+            app.rewind.clear(true);
+            app.rewind_music.clear();
+        }
+        const bool rewind_allowed = app.cfg.rewind && !app.menu.open() && states_locked(app).empty();
+        const bool was_rewinding = app.rewinding;
+        bool scripted_rewind = false;
+        if (app.rewind_script.passes > 0) {
+            if (!app.rewind_script.armed && app.m->frame_count >= app.rewind_script.frame) app.rewind_script.armed = true;
+            if (app.rewind_script.armed) { scripted_rewind = true; --app.rewind_script.passes; }
+        }
+        app.rewinding = rewind_allowed && (rewind_held(app, touch_held) || scripted_rewind);
+        if (app.rewinding) app.fast_forward = false;
+        if (was_rewinding && !app.rewinding) {
+            LOGI("rewind", "playing on from frame %llu (%zu snapshots, %.1f MB left)",
+                 (unsigned long long)app.m->frame_count, app.rewind.snapshots(),
+                 double(app.rewind.memory()) / 1048576.0);
+            if (app.audio) SDL_ClearAudioStream(app.audio);
+        }
+        // Save and load on a pad: on the press, polled so triggers count too.
+        {
+            const bool save_down = pad_binding_held(app, app.cfg.state_save_button);
+            const bool load_down = pad_binding_held(app, app.cfg.state_load_button);
+            if (!app.menu.open()) {
+                if (save_down && !app.save_button_was) save_state(app, app.cfg.state_slot);
+                if (load_down && !app.load_button_was) load_state(app, app.cfg.state_slot);
+            }
+            app.save_button_was = save_down;
+            app.load_button_was = load_down;
+        }
+        touch_held &= uint16_t(~(TOUCH_FAST_FORWARD | TOUCH_REWIND));  // not the game's
         uint16_t raw = 0, raw2 = 0;
         // Emulated frames advance in batches, so a window of frame numbers can
         // be stepped straight over: arm on reaching the frame, then hold for a
@@ -1242,16 +1837,24 @@ int main(int argc, char** argv) {
             app.start_stage(app.cli_stage);
         }
         int steps = 0;
-        const int max_steps = app.fast_forward ? 8 : 3;
+        // How many frames this pass: one per elapsed frame period (at most
+        // 3), 2X / 4X that many times over, MAX 8 without waiting.
+        const PassPlan plan = plan_pass(accumulator, frame_ticks, app.fast_forward, app.cfg.ff_speed);
         uint64_t emu_t0 = SDL_GetPerformanceCounter();
         const bool autotest = app.autotest_frames != 0;
         // With scripted host input the loop runs one emulated frame per pass,
         // so a "hold for N frames" means N frames rather than N batches of up
         // to 64 - the difference between a tap and holding the button down.
         const int autotest_batch = app.host_script.empty() ? 64 : 1;
-        while ((accumulator >= frame_ticks || app.fast_forward || autotest) &&
-               steps < (autotest ? autotest_batch : max_steps)) {
+        while (steps < (autotest ? autotest_batch : plan.frames)) {
             if (autotest && app.m->frame_count >= app.autotest_frames) break;
+            if (app.rewinding) {
+                // One step back per frame period, at the normal pacing.
+                rewind_step(app);
+                if (autotest && !app.fast_forward) accumulator -= frame_ticks;
+                ++steps;
+                continue;
+            }
             // Scripted keys are pushed as events and handled on the next pass
             // round the event loop, exactly like a key someone pressed.
             for (auto& k : app.key_script) {
@@ -1284,16 +1887,34 @@ int main(int argc, char** argv) {
             app.music.set_volume(app.cfg.mod_music_volume * app.cfg.music_volume / 100);
             app.music.after_frame(*app.m, first_sample);
             follow_time_attack(app);
+            if (app.cfg.rewind && states_locked(app).empty() && app.m->frame_count % kRewindInterval == 0)
+                rewind_push(app);
             if (app.achievements_on && !app.cheating) {
                 app.achievements.update(*app.m, [&](const achievements::Achievement& a) {
                     app.toasts.push_back({a.title, a.description, SDL_GetTicks() + 5000});
                     app.achievements.save_progress(achievements_progress_path(app));
                 });
             }
-            if (!app.fast_forward) accumulator -= frame_ticks;
+            if (autotest && !app.fast_forward) accumulator -= frame_ticks;
             ++steps;
         }
-        if (app.fast_forward) accumulator = 0;
+        if (!autotest) accumulator = plan.reset_accumulator ? 0 : accumulator - plan.ticks * frame_ticks;
+        else if (app.fast_forward) accumulator = 0;
+        if (app.m->vdp.tiles != app.tiles) app.m->vdp.tiles = app.tiles;
+        if (app.m->characters != app.character_palettes) app.m->characters = app.character_palettes;
+        if (TileReplacer* t = app.tiles.get()) {
+            t->dumping = app.cfg.dump_graphics;
+            if (const int n = write_tile_dumps(*t, app.tiles_dir + "/Dump")) LOGI("tiles", "%d tile(s) dumped", n);
+            // The plane text on screen, for mdtext_ patterns.
+            if (write_text_dumps(*t, app.tiles_dir + "/Dump/Text", app.m->framebuffer, app.m->fb_width, app.m->fb_height,
+                                 kScreenWidth, app.m->fb_extra))
+                LOGI("text", "text runs on screen listed in %s/Dump/Text", app.tiles_dir.c_str());
+        }
+        if (!app.tiles_dir.empty()) {
+            update_sprite_recorder(app);
+            if (app.sprites)
+                if (const int n = write_sprite_dumps(*app.sprites, app.tiles_dir + "/Dump")) LOGI("sprites", "%d sprite(s) dumped", n);
+        }
         uint64_t emu_t1 = SDL_GetPerformanceCounter();
         if (steps) app.timing.emu_ms = double(emu_t1 - emu_t0) * 1000.0 / double(freq) / steps;
         fps_sims += uint64_t(steps);
@@ -1303,17 +1924,20 @@ int main(int argc, char** argv) {
         if (app.audio) {
             // VOLUME takes effect at once, not at the next start.
             SDL_SetAudioStreamGain(app.audio, float(app.cfg.volume) / 100.0f);
+            // Fast-forward at 2X / 4X makes sound exactly that many times
+            // faster than it plays, so all of it is kept and played that many
+            // times faster: continuous, only higher. MAX has no steady rate
+            // to play it at, so its sound is dropped, as it always was.
+            const int speed = app.fast_forward ? fast_forward_multiplier(app.cfg.ff_speed) : 1;
             if (!app.m->audio_out.empty()) {
-                if (app.fast_forward) app.m->audio_out.clear();
-                else {
+                if (speed > 0)
                     SDL_PutAudioStreamData(app.audio, app.m->audio_out.data(), int(app.m->audio_out.size() * sizeof(int16_t)));
-                    app.m->audio_out.clear();
-                }
+                app.m->audio_out.clear();
             }
             const double target = kAudioRate * 0.05 * 4;  // bytes queued for 50 ms (stereo s16)
             double queued = double(SDL_GetAudioStreamQueued(app.audio));
             double err = (queued - target) / target;
-            float ratio = float(1.0 + std::clamp(err * 0.01, -0.01, 0.01));
+            float ratio = float(std::max(speed, 1) * (1.0 + std::clamp(err * 0.01, -0.01, 0.01)));
             SDL_SetAudioStreamFrequencyRatio(app.audio, ratio);
             if (queued > target * 6) SDL_ClearAudioStream(app.audio);  // after a stall
         } else {
@@ -1345,6 +1969,18 @@ int main(int argc, char** argv) {
         if (app.ui.ready()) {
             app.ui.begin_frame();
             panelled = app.menu.art_panel(app.ui, &art);
+            app.backdrops.choose(app.cfg.menu_backdrop_zone());
+            app.backdrops.update(app.renderer, app.cfg.menu_backdrop_on(), app.menu.open());
+            MenuBackdrops::Shown zone;
+            if (app.backdrops.current(zone)) {
+                auto colour = [](uint32_t argb, uint8_t a) {
+                    return ui::Color{uint8_t(argb >> 16), uint8_t(argb >> 8), uint8_t(argb), a};
+                };
+                app.menu.set_backdrop(zone.texture, zone.width, zone.height, colour(zone.tint, 255),
+                                      colour(zone.accent, 255));
+            } else {
+                app.menu.clear_backdrop();
+            }
         }
         // With a panel the picture is drawn twice: once filling the window as
         // a backdrop, which the menu then dims, and once in the panel itself.
@@ -1354,12 +1990,26 @@ int main(int argc, char** argv) {
             SDL_RenderTexture(app.renderer, app.texture, &src, &art);
         }
         if (app.touch_enabled) {
-            app.touch.layout(ow, oh, app.cfg.touch_stick);
-            draw_touch_controls(app, touch_held);
+            // The fast-forward button is not there during a time attack run,
+            // and is lit while fast-forward is on (TOGGLE leaves it on).
+            app.touch.layout(ow, oh, app.cfg.touch_stick, app.cfg.touch_sonic_cd, app.cfg.touch_ff && !app.ta.running,
+                             app.cfg.touch_rewind && app.cfg.rewind && !app.ta.running);
+            draw_touch_controls(app, uint16_t(touch_held | (app.fast_forward ? TOUCH_FAST_FORWARD : 0) |
+                                              (app.rewinding ? TOUCH_REWIND : 0)));
         }
         if (app.ui.ready()) {
             app.menu.draw(app.ui, app.achievements);
-            if (app.achievements_on) draw_toasts(app);
+            draw_toasts(app);
+            if (app.rewinding && !app.menu.open()) {
+                // Top centre, where nothing else is.
+                ui::Ui& g = app.ui;
+                const char* label = "<< REWIND";
+                const float w = g.text_width(ui::Font::Pixel, label) + g.px(28);
+                const float h = g.line_height(ui::Font::Pixel) + g.px(14);
+                const SDL_FRect r{(g.width() - w) * 0.5f, g.px(12), w, h};
+                g.panel(r, ui::theme::surface.alpha(200), ui::theme::accent, h * 0.5f);
+                g.text(ui::Font::Pixel, r.x + g.px(14), r.y + g.px(7), label, ui::theme::text);
+            }
             app.ui.end_frame();
         }
         if (app.cfg.debug_overlay) {
@@ -1427,6 +2077,9 @@ int main(int argc, char** argv) {
     if (!app.record_path.empty()) write_recording(app, app.record_path);
     if (app.audio) SDL_DestroyAudioStream(app.audio);
     for (SDL_Gamepad* g : app.pads) SDL_CloseGamepad(g);
+    // The picture worker is stopped and its textures freed while the
+    // renderer they belong to still exists.
+    app.backdrops.shutdown();
     SDL_DestroyTexture(app.texture);
     SDL_DestroyRenderer(app.renderer);
     SDL_DestroyWindow(app.window);

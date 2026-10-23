@@ -10,6 +10,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -18,6 +19,10 @@
 struct TTF_Font;
 struct TTF_Text;
 struct TTF_TextEngine;
+
+namespace chaotix {
+struct GameFont;
+}
 
 namespace chaotix::ui {
 
@@ -55,8 +60,17 @@ enum class Font {
 };
 
 // True for the fonts drawn from the bitmap-style face, whose sizes are
-// snapped to whole pixels so the glyphs stay sharp.
+// snapped to whole pixels so the glyphs stay sharp. These are also the ones
+// the game's own font stands in for (set_game_font).
 constexpr bool is_pixel(Font f) { return f == Font::Pixel || f == Font::PixelBig; }
+
+// How many screen pixels a pixel of the game's 8x16 font becomes for a pixel
+// face of this size: a whole number, so its pixels stay square and sharp,
+// and the glyphs about as tall as the pixel face's line.
+inline int game_font_scale(float pixel_size) {
+    const int k = int(pixel_size / 16.0f + 0.5f);
+    return k < 1 ? 1 : k;
+}
 
 class Ui {
 public:
@@ -89,6 +103,21 @@ public:
     float text_fit(Font f, float x, float y, float max_w, const std::string& s, Color c,
                    bool is_path = false);
 
+    // The game's own menu font (renderer/game_font.h, issue #8). Once set,
+    // and while enabled, the pixel fonts draw any string it has every
+    // character of with it instead; other strings keep the pixel face. The
+    // font is copied into a texture, so `font` need not outlive the call.
+    // Returns false if the texture could not be made.
+    bool set_game_font(const GameFont& font);
+    void enable_game_font(bool on) { game_on_ = on; }
+    bool game_font_active() const { return game_on_ && game_tex_ != nullptr; }
+    // Whether s, in f, is drawn with the game's font right now.
+    bool uses_game_font(Font f, const std::string& s) const;
+
+    // Draws a texture over r, cropped to r's shape rather than stretched, so
+    // a picture fills a window of any aspect.
+    void image_cover(SDL_Texture* tex, float tex_w, float tex_h, const SDL_FRect& r, uint8_t alpha = 255);
+
     void rect(const SDL_FRect& r, Color c, float radius = 0);
     void outline(const SDL_FRect& r, Color c, float radius = 0, float thickness = 1);
     void panel(const SDL_FRect& r, Color fill, Color border, float radius, float thickness = 1);
@@ -112,6 +141,14 @@ private:
     std::string shorten(Font f, const std::string& s, float max_w, bool is_path);
     void set_sizes();
     void drop_cache();
+    // The game font's pixel size for f (game_font_scale of its pixel face).
+    int game_scale(Font f) const { return game_font_scale(pixel_sizes_[size_t(f)]); }
+    float game_text(Font f, float x, float y, const std::string& s, Color c);
+
+    SDL_Texture* game_tex_ = nullptr;
+    std::array<int16_t, 128> game_glyph_{};
+    bool game_on_ = false;
+    float pixel_sizes_[size_t(Font::Count_)] = {};
 
     SDL_Renderer* renderer_ = nullptr;
     TTF_TextEngine* engine_ = nullptr;

@@ -6,6 +6,12 @@
 
 namespace chaotix {
 
+// Not a Mega Drive button: the on-screen fast-forward button (issue #45). The
+// platform layer takes it out before the pad reaches the game.
+constexpr uint16_t TOUCH_FAST_FORWARD = 1 << 15;
+// Likewise the on-screen rewind button (issue #40), held to step back.
+constexpr uint16_t TOUCH_REWIND = 1 << 14;
+
 struct TouchButton {
     uint16_t mask;       // PAD_* bits produced while held
     float cx, cy, r;     // centre and radius in output pixels
@@ -16,8 +22,16 @@ struct TouchButton {
 class TouchControls {
 public:
     // Lays out controls for an output of w x h pixels. With stick set the
-    // directions are a joystick rather than a d-pad (issue #30).
-    void layout(int w, int h, bool stick = false);
+    // directions are a joystick rather than a d-pad (issue #30). With
+    // sonic_cd, the layout of Sonic CD's 2013 mobile version (issue #34): the
+    // directions and one large jump button, with HOLD (B) and CALL (A) small
+    // above it -- the only buttons this game uses -- and the whole lower
+    // right of the screen jumping where nothing else is. With fast_forward, a
+    // small fast-forward button (TOUCH_FAST_FORWARD) in the top-left corner,
+    // which both layouts leave empty (issue #45). With rewind, a rewind
+    // button (TOUCH_REWIND) there too, left of fast-forward (issue #40).
+    void layout(int w, int h, bool stick = false, bool sonic_cd = false, bool fast_forward = false,
+                bool rewind = false);
     // Buttons pressed by a touch at (x, y) in output pixels.
     uint16_t hit(float x, float y) const;
     // A finger put down (down) or moved, by its id; returns what it presses.
@@ -34,9 +48,12 @@ public:
 
 private:
     uint16_t stick_directions(float dx, float dy) const;
+    uint16_t buttons_at(float x, float y) const;  // everything but the directions
 
     std::vector<TouchButton> buttons_;
     bool stick_ = false;
+    bool sonic_cd_ = false;
+    float w_ = 0, h_ = 0;
     bool stick_held_ = false;   // a finger has the stick
     uint64_t stick_finger_ = 0;
     float knob_dx_ = 0, knob_dy_ = 0;

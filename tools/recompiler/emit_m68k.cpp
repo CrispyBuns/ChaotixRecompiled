@@ -272,6 +272,9 @@ void emit_m68k(const Program& p, const EmitOptions& opt, EmitResult& out) {
             x.o.f("  default: return 1;\n  }\n");
             for (uint64_t bk : f.blocks) {
                 const Block& b = p.blocks.at(bk);
+                const int sp = p.space_of(b.start, x.bank);
+                if (sp >= 0 && !p.spaces[size_t(sp)].ram && b.end > b.start)
+                    out.rom_code.push_back({p.spaces[size_t(sp)].to_rom(b.start), b.end - b.start});
                 x.o.f("%s:\n", label(b.start).c_str());
                 for (size_t n = 0; n < b.insns.size(); ++n) {
                     m68k::Insn in;

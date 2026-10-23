@@ -21,7 +21,7 @@
 | SDL3 前端（Windowed/Borderless/Fullscreen、HiDPI、integer/fit/stretch、aspect ratio、鍵盤/手把/觸控、debug overlay） | ✅（Windows 已實測） | `--autotest` 讀回實際輸出畫面 |
 | 音效（Z80 直譯器 + YM2612 FM + SN76489 PSG + PWM 混音 → SDL3 audio stream） | ✅ 第一版（音質未經聽感/逐 sample 驗證） | WAV 輸出 + 頻譜檢查（有音高與節奏結構） |
 | 真正寬螢幕（關卡中最多 448×224 ≈ 1.87:1，涵蓋 16:9 / 16:10；其他場景 4:3 加側邊黑條） | ✅ | `lockstep_widescreen`、`golden_frames_widescreen`、36,000 幀寬螢幕 lockstep；見 §8 |
-| Android / iOS / macOS / Linux 建置 | ⏳ `CMakePresets.json`、Android Gradle 專案、iOS Info.plist 已建立；**尚未在這些平台實際建置** | 見 §9 |
+| Android / iOS / macOS / Linux 建置 | ✅ Android（Gradle）、macOS .app 與 iOS .ipa（`scripts/package_apple.sh`，見 [docs/BUILDING_APPLE.md](docs/BUILDING_APPLE.md)）；macOS（M1）上全部測試通過、lockstep bit-identical；iOS 只在模擬器上跑過 | 見 §9 |
 
 實測數據（Windows x64、MinGW GCC 15、Release）：
 - 重編譯後執行：約 **0.83–0.92 ms / frame**（原機一幀 16.7 ms），SDL 前端鎖定 59.92 Hz。
@@ -239,6 +239,7 @@ Machine（simulation）                                   Platform（SDL3）
 | Camera clamp（68K `0x9A76`，所有 zone） | camera X（`$FFDFE8`）夾在 plane A 結構（`$FFC1DE`）的 [$A, $8]。 | 兩個界線各內縮 E（房間比畫面窄時置中），邊界不會顯示關卡外。 |
 | 場景判斷 | 關卡每幀呼叫 plane 更新 `0x984E`/`0x98C4`。 | 最近 8 幀內有執行 → 寬螢幕；否則（標題、選單、過場）4:3 + 黑邊。WORLD ENTRANCE（zone 7，大廳）一律 4:3（issue #13，見 `docs/ISSUE_13_LOBBY.md`）。 |
 | 特殊關卡（模式 `0x20`） | 主 SH-2 以多邊形畫管道（SDRAM 中執行期載入的程式）。光柵器 `$06004858` 以 SDRAM `0x06003844` 的矩形（16/303/4/219）裁切；x 用 `SHLR8`（邏輯位移）轉換，所以 x < 0 會壞掉。 | 整個管道往右投影 C px（五處 `ADD #80` 改為 80 + C/2），矩形改為 [0, 319 + 2C]，host 把多邊形像素移回 C、邊界外寫入影子緩衝；每幀清畫面的 fill 認得後清整條加寬的行。詳見 `docs/ISSUE_18_SPECIAL_STAGE.md`（issue #18）。 |
+| 特殊關卡結算畫面、獎勵關卡 | 兩者都由特殊關卡的同一套 SH-2 多邊形程式繪製，但用整個畫面的矩形（0/319/0/223）。結算畫面：主 SH-2 閒置時每個 vblank 呼叫 `0x06007640`，畫 `0x06007688` 的固定 2D 多邊形表（背景多邊形都碰到 x = 0 或 319）。獎勵關卡：隧道是 MD plane A 的同心圓圖（只到 4:3 邊緣，色盤循環），道具與方塊側面由開機碼 `0x06000CD0` 以中心 X 160（`0x06000CE6` 的 `MOV #-96,R10`）繪製。 | 同特殊關卡的機制（矩形 [0, 319 + 2C]、多邊形像素移回 C）。結算畫面：表內頂點 x + C，邊緣頂點推到加寬後的邊緣；只在加寬的特殊關卡之後才判定。獎勵關卡：中心改為 160 + C，該處理常式呼叫的縮放 blit 由 SH-2 hook 把 X 移回；邊界的同心圓由畫面本身量出的「半徑→色號」表延伸（`Vdp::radial_lut`）。詳見 `docs/ISSUE_38_BONUS_STAGE.md`（issue #38、#39）。 |
 | 關卡邊界 | 鏡頭夾制（上）讓邊界通常落在關卡內。房間比畫面窄時鏡頭置中，邊界會超出該房間的鏡頭範圍，但那裡仍是引擎從關卡配置串流進來的圖塊。大廳（WORLD ENTRANCE）例外：旁邊是室外入口等其他區域，因此大廳保持 4:3（issue #13）。 | `patches::margin_cut` 只把「關卡原點左側」（沒有配置資料）的部分塗黑。 |
 | HUD | 由 32X 繪於固定位置 | 保持在原生 4:3 區域內（未移動）。 |
 | 遊戲模式分派器（68K `0x3262`） | `move.w $FFDFDE,d0; andi.w #$78,d0; jsr $883270(pc,d0.w)` — 16 個模式各一格 `jmp`。每個模式處理常式自己跑迴圈，只有在該場景結束時才回到這裡，因此這是遊戲在兩個場景之間唯一會經過的點。 | 不改變執行；只在此處套用 host 要求的關卡（TIME ATTACK，見 §8.3）。因為直譯器與生成碼在同一條指令前呼叫同一個 hook，lockstep 仍 bit-identical（測試 `stage_select_starts_the_chosen_level`）。 |

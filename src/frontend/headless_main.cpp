@@ -4,6 +4,8 @@
 //   chaotix_headless --rom <file> --frames N [--shot F1,F2,...] [--out dir]
 //                    [--press FRAME:BUTTON[+BUTTON]:DURATION ...] [--state-every N]
 //                    [--interp]   (force interpreter even if generated code exists)
+//                    [--save-state FRAME:FILE] [--load-state FILE] [--state-hash-every N]
+//                    [--rewind INTERVAL[:BUDGET_MB]]   (issue #40, runtime/save_state.h)
 #include "audio/music_mods.h"
 #include "cpu/m68k/m68k_interp.h"
 #include "cpu/m68k/m68k_ops.h"
@@ -14,8 +16,19 @@
 #include "game/recomp_dispatch.h"
 #include "renderer/image_io.h"
 #include "runtime/log.h"
+#include "runtime/character_mods.h"
+#include "renderer/sprite_pack.h"
+#include "renderer/sprite_sheet.h"
+#include "renderer/tile_pack.h"
 #include "runtime/patches.h"
+#include "runtime/rewind.h"
+#include "runtime/save_state.h"
+#include "runtime/sprite_record.h"
+#include "runtime/sprite_replace.h"
+#include "runtime/tile_replace.h"
+#include "frontend/backdrop.h"
 #include "frontend/time_attack.h"
+#include "renderer/game_font.h"
 #include "runtime/system.h"
 #include <chrono>
 #include <cstdio>
@@ -141,8 +154,165 @@ std::string compare_machines(const Machine& a, const Machine& b) {
     if (!(r = mem("32X FB1", a.mars.fb[1], b.mars.fb[1], sizeof a.mars.fb[1])).empty()) return r;
     if (!(r = mem("32X palette", a.mars.pal, b.mars.pal, sizeof a.mars.pal)).empty()) return r;
     if (!(r = mem("32X comm", a.mars.comm, b.mars.comm, sizeof a.mars.comm)).empty()) return r;
+    if (!(r = mem("cartridge SRAM", a.sram, b.sram, sizeof a.sram)).empty()) return r;
     if (!(r = mem("output image", a.framebuffer, b.framebuffer, sizeof a.framebuffer)).empty()) return r;
     return "";
+}
+
+// The interpreter and the recompiled code must call the sprite hooks at the
+// same points with the same registers: their draw lists must be equal.
+std::string compare_sprite_lists(const SpriteList& a, const SpriteList& b) {
+    char buf[512];
+    if (a.draws.size() != b.draws.size()) {
+        std::snprintf(buf, sizeof buf, "%zu draws vs %zu", a.draws.size(), b.draws.size());
+        return buf;
+    }
+    for (size_t i = 0; i < a.draws.size(); ++i) {
+        const SpriteDraw& x = a.draws[i];
+        const SpriteDraw& y = b.draws[i];
+        const bool same = x.graphic == y.graphic && x.source == y.source && x.x == y.x && x.y == y.y && x.flags == y.flags &&
+                          x.sx == y.sx && x.sy == y.sy && x.kind == y.kind && x.warp == y.warp && x.colour == y.colour && x.bank == y.bank &&
+                          x.frame == y.frame && x.route == y.route && x.hash == y.hash && x.size == y.size &&
+                          std::memcmp(&x.clip, &y.clip, sizeof x.clip) == 0 &&
+                          std::equal(a.bytes(x), a.bytes(x) + x.size, b.bytes(y));
+        if (!same) {
+            std::snprintf(buf, sizeof buf, "draw %zu: %s vs %s", i, describe(x).c_str(), describe(y).c_str());
+            return buf;
+        }
+    }
+    if (a.pool != b.pool) return "the graphics' bytes differ";
+    return "";
+}
+
+// The first byte a sprite self-test picture got wrong, and which draws of the
+// list cover it.
+void report_sprite_mismatch(const Machine& m, const SpriteCheck& r, const SpriteList& list) {
+    const int rel = r.first - 0x200;
+    std::printf("SPRITE MISMATCH frame %llu buffer %d: %llu wrong, %llu missing, %llu extra of %llu; first at offset %05X (line %d, x %d): frame buffer %02X, rebuilt %02X\n",
+                (unsigned long long)m.frame_count, m.mars.fb_display, (unsigned long long)r.wrong,
+                (unsigned long long)r.missing, (unsigned long long)r.extra, (unsigned long long)r.compared, r.first,
+                rel >= 0 ? rel / 512 : -1, rel >= 0 ? rel % 512 : rel, r.first_expected, r.first_rebuilt);
+    std::printf("  offsets (frame buffer/shadow):");
+    for (int o : r.some)
+        std::printf(" %05X=%02X/%02X", o, m.mars.fb[m.mars.fb_display][o], m.fb_margin[m.mars.fb_display][o]);
+    std::printf("\n");
+    SpriteCanvas one;
+    for (size_t k = 0; k < list.draws.size(); ++k) {
+        one.clear();
+        const SpriteDraw& d = list.draws[k];
+        rasterise_sprite(d, list.bytes(d), d.size, one, d.kind == SpriteKind::Warped ? list.pool.data() + d.warp : nullptr);
+        if (one.cov[size_t(r.first)])
+            std::printf("  covered by %zu: %s; clip %d,%d,%d,%d scale %d..%d\n", k, describe(d).c_str(), d.clip.left,
+                        d.clip.right, d.clip.top, d.clip.bottom, d.clip.scale_min, d.clip.scale_max);
+    }
+}
+
+// --sprites-oracle: random calls of the three blitters, each run by the
+// game's own code (the interpreter, on a machine of its own) and drawn by
+// rasterise_sprite; the two must write the same bytes. Graphics with pixels
+// of every value and spans outside their box (the plain blitter trusts the
+// box), flags, hotspots, clip rectangles and scales at random. Spans outside
+// the box are left to the plain blitter: the scaled ones then read their
+// tables out of range, which is undefined (stack contents).
+SpriteCanvas* g_oracle_canvas = nullptr;
+int sprite_oracle(const std::string& rom_path, int calls, uint32_t seed) {
+    auto o = std::make_unique<Machine>();
+    std::string err;
+    if (!o->load_rom(rom_path, &err)) return -1;
+    o->reset();
+    const MarsHeader& h = o->rom.mars;
+    for (uint32_t i = 0; i < h.size; ++i) o->sdram[(h.dest + i) & 0x3FFFF] = o->rom.data[(h.source + i) & (o->rom.data.size() - 1)];
+    o->on_fb_write = [](void*, uint32_t off, uint32_t v, int size, bool overwrite) {
+        for (int i = 0; i < size; ++i) {
+            const uint8_t b = uint8_t(v >> (8 * (size - 1 - i)));
+            if (overwrite && !b) continue;
+            const uint32_t at = (off + uint32_t(i)) & 0x1FFFF;
+            g_oracle_canvas->px[at] = b;
+            g_oracle_canvas->cov[at] = 1;
+        }
+    };
+    auto rnd = [&seed] { seed = seed * 1664525u + 1013904223u; return seed >> 8; };
+    auto rr = [&rnd](int a, int b) { return a + int(rnd() % uint32_t(b - a + 1)); };
+    auto put16 = [](uint8_t* p, uint32_t v) { p[0] = uint8_t(v >> 8); p[1] = uint8_t(v); };
+    auto put32 = [](uint8_t* p, uint32_t v) { p[0] = uint8_t(v >> 24); p[1] = uint8_t(v >> 16); p[2] = uint8_t(v >> 8); p[3] = uint8_t(v); };
+    constexpr uint32_t kGraphic = 0x30000, kParams = 0x31000, kStop = 0x0603E000;
+    SpriteCanvas blitter, raster;
+    int differ = 0;
+    for (int t = 0; t < calls; ++t) {
+        SpriteDraw d;
+        d.kind = SpriteKind(rr(0, 2));
+        std::vector<uint8_t> g;
+        auto p16 = [&g](int v) { g.push_back(uint8_t(uint16_t(v) >> 8)); g.push_back(uint8_t(v)); };
+        const int x0 = -2 * rr(0, 30), x1 = 2 * rr(1, 30), y0 = -rr(0, 30), y1 = rr(1, 30);
+        p16(x0); p16(x1); p16(y0 * 256); p16(y1 * 256);
+        for (int k = rr(1, 12); k > 0; --k) {
+            int xs = 2 * rr(x0 / 2, x1 / 2 - 1), line = rr(y0, y1);
+            int len = 2 * rr(1, (x1 - xs) / 2);
+            if (d.kind == SpriteKind::Plain && rnd() % 16 == 0) { xs += 2 * rr(-10, 10); line += rr(-5, 5); }
+            if (xs + len > 126) len = (126 - xs) & ~1;
+            if (len <= 0) continue;
+            g.push_back(uint8_t(xs)); g.push_back(uint8_t(xs + len)); p16(line * 256);
+            for (int i = 0; i < len; ++i) g.push_back(rnd() % 3 == 0 ? 0 : uint8_t(rr(1, 255)));
+        }
+        g.push_back(0); g.push_back(0); p16(0);
+        std::copy(g.begin(), g.end(), o->sdram + kGraphic);
+        d.x = rr(-80, 400);
+        d.y = rr(-40, 270);
+        d.flags = uint32_t(d.kind == SpriteKind::Plain ? rr(0, 11) : rr(0, 7));
+        const bool wide = rnd() & 1;
+        d.clip.left = int16_t(wide ? -56 : 0);
+        d.clip.right = int16_t(wide ? 376 : 320);
+        d.clip.top = rnd() % 4 ? 0 : rr(0, 100) << 8;
+        d.clip.bottom = (rnd() % 4 ? 223 : rr(100, 239)) << 8;
+        d.clip.scale_min = 0x10;
+        d.clip.scale_max = 0x800;
+        d.sx = rr(0x20, 0x300);
+        d.sy = rnd() % 8 ? rr(0x20, 0x300) : rr(4, 0x20);
+        if (rnd() % 4 == 0) d.sx = d.sy = 0x100;
+        std::vector<uint8_t> warp(kWarpParamBytes + kWarpSineBytes);
+        for (int axis = 0; axis < 2; ++axis) {
+            put16(&warp[size_t(axis * 8)], uint32_t(rr(0x60, 0x200)));
+            put16(&warp[size_t(axis * 8 + 2)], uint32_t(rr(0, 255)));
+            put16(&warp[size_t(axis * 8 + 4)], uint32_t(rr(0, 512)));
+            put16(&warp[size_t(axis * 8 + 6)], uint32_t(rr(0, 0xC0)));
+        }
+        std::copy(warp.begin(), warp.begin() + kWarpParamBytes, o->sdram + kParams);
+        std::copy(o->sdram + 0x3C48, o->sdram + 0x3C48 + kWarpSineBytes, warp.begin() + kWarpParamBytes);
+        // The game's blitter, from the call to its return.
+        uint8_t* s = o->sdram;
+        put16(s + 0x3834, uint16_t(d.clip.left));
+        put16(s + 0x3836, uint16_t(d.clip.right));
+        put32(s + 0x3838, uint32_t(d.clip.top));
+        put32(s + 0x383C, uint32_t(d.clip.bottom));
+        put16(s + 0x3840, uint16_t(d.clip.scale_min));
+        put16(s + 0x3842, uint16_t(d.clip.scale_max));
+        sh2::State& c = o->sh2[0];
+        c.r[1] = uint32_t(d.x); c.r[2] = uint32_t(d.y); c.r[3] = d.flags; c.r[4] = 0x06000000 + kGraphic;
+        c.r[5] = d.kind == SpriteKind::Warped ? 0x06000000 + kParams : uint32_t(d.sx);
+        c.r[6] = uint32_t(d.sy);
+        c.r[15] = 0x0603F000; c.pr = kStop; c.sr = 0xF0;
+        c.pc = d.kind == SpriteKind::Scaled ? patches::kSh2BlitScaled : d.kind == SpriteKind::Warped ? patches::kSh2BlitWarped : patches::kSh2Blit;
+        o->mars.fb_display = 1;
+        blitter.clear();
+        g_oracle_canvas = &blitter;
+        for (int n = 0; n < 1000000 && c.pc != kStop; ++n) { c.cycles = 1 << 20; sh2::interp_block(&c); }
+        raster.clear();
+        rasterise_sprite(d, g.data(), uint32_t(g.size()), raster, warp.data());
+        int bytes = 0, first = -1;
+        for (int i = 0; i < 0x20000; ++i)
+            if (blitter.cov[size_t(i)] != raster.cov[size_t(i)] || (blitter.cov[size_t(i)] && blitter.px[size_t(i)] != raster.px[size_t(i)])) {
+                if (first < 0) first = i;
+                ++bytes;
+            }
+        if (bytes || c.pc != kStop) {
+            if (++differ <= 8)
+                std::printf("SPRITE ORACLE call %d: %s; clip %d,%d,%d,%d: %d bytes differ, first at %05X%s\n", t, describe(d).c_str(),
+                            d.clip.left, d.clip.right, d.clip.top >> 8, d.clip.bottom >> 8, bytes, first,
+                            c.pc != kStop ? " (the blitter did not return)" : "");
+        }
+    }
+    std::printf("sprites oracle: %d calls, %d differ from the game's blitters\n", calls, differ);
+    return differ;
 }
 
 void dump_state(const Machine& m) {
@@ -179,6 +349,14 @@ int main(int argc, char** argv) {
     bool trace_wide = false;
     bool wide_everywhere = false;  // also widen the scenes kept 4:3
     bool hud_edges = false;        // the HUD at the widened picture's edge
+    int debug_layer = 0;
+    std::string tiles_dir, dump_tiles_dir;
+    std::string export_sheets_dir;  // --export-sheets DIR: every frame of each bank, after the run
+    // Issue #8, the menu's art: --backdrop KEY|all DIR renders menu backdrops
+    // (frontend/backdrop.h) as PNGs; --game-font PNG writes the font atlas.
+    std::string backdrop_key, backdrop_dir, game_font_png;
+    std::vector<std::string> patch_files;  // --patch FILE: IPS/BPS applied to the ROM in memory
+    std::string characters_dir;  // --characters DIR: character mods (runtime/character_mods.h)
     std::vector<cheats::Write> cheat_writes;  // --cheat, set before every frame
     uint64_t wide_live_frames = 0;
     int wide_stretches = 0;
@@ -191,8 +369,10 @@ int main(int argc, char** argv) {
     std::string achievements_file;  // --achievements FILE: report unlocks
     uint64_t min_centre_frames = 0;  // fail if fewer frames could be compared
     std::string wav_path;
-    struct Poke { uint64_t frame; uint32_t addr; uint8_t value; };
+    struct Poke { uint64_t frame; uint32_t addr; uint8_t value; bool sdram = false, fb = false; };
     std::vector<Poke> pokes;
+    struct Peek { uint64_t every; uint32_t addr; uint32_t bytes; };
+    std::vector<Peek> peeks;
     std::string music_dir;  // --music-dir: music replaced by files (audio/music_mods.h)
     std::string coverage_path;
     int break_cpu = -1;
@@ -224,6 +404,28 @@ int main(int argc, char** argv) {
     int replay_result = -1;           // what the session it came from produced
     uint64_t stage_started = 0;       // the frame the game took it
     bool stage_pending_last = false;
+    // 32X sprite recording (runtime/sprite_record.h): --sprites installs the
+    // recorder; --sprites-log FRAME[,FRAME...] prints the displayed buffer's
+    // draw list at those frames; --sprites-check rebuilds every new picture's
+    // sprites host-side and compares them with the emulated frame buffer.
+    bool want_sprites = false, sprites_check = false;
+    std::set<uint64_t> sprites_log;
+    // --sprites-oracle N[:SEED]: N random blitter calls, game code vs rebuild.
+    int oracle_calls = 0;
+    uint32_t oracle_seed = 1;
+    // Save states (issue #40): --save-state FRAME:FILE writes one after that
+    // frame; --load-state FILE loads one before running (into the lockstep
+    // reference too), and the run then carries on from its frame up to
+    // --frames, so frame numbers in the other options keep their meaning.
+    // --state-hash-every N prints a fingerprint of the whole machine.
+    std::map<uint64_t, std::vector<std::string>> save_states;
+    std::string load_state_path;
+    uint64_t state_hash_every = 0;
+    // --rewind INTERVAL[:BUDGET_MB]: a snapshot every INTERVAL frames into a
+    // rewind buffer (runtime/rewind.h), timed; at the end every snapshot is
+    // stepped back to and checked against the state it was taken from.
+    int rewind_interval = 0;
+    size_t rewind_budget_mb = 64;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
@@ -280,6 +482,19 @@ int main(int argc, char** argv) {
             std::fclose(hf);
         }
         else if (a == "--interp") force_interp = true;
+        else if (a == "--save-state") {
+            const std::string spec = next();
+            const size_t colon = spec.find(':');
+            if (colon == std::string::npos) { std::fprintf(stderr, "bad --save-state (FRAME:FILE)\n"); return 2; }
+            save_states[std::strtoull(spec.c_str(), nullptr, 10)].push_back(spec.substr(colon + 1));
+        }
+        else if (a == "--load-state") load_state_path = next();
+        else if (a == "--state-hash-every") state_hash_every = std::strtoull(next().c_str(), nullptr, 10);
+        else if (a == "--rewind") {
+            const auto parts = split(next(), ':');
+            rewind_interval = std::max(1, std::atoi(parts[0].c_str()));
+            if (parts.size() > 1) rewind_budget_mb = size_t(std::max(1, std::atoi(parts[1].c_str())));
+        }
         else if (a == "--lockstep") lockstep = true;
         else if (a == "--profile") profile = true;
         else if (a == "--wide") wide = std::atoi(next().c_str());
@@ -287,6 +502,35 @@ int main(int argc, char** argv) {
         else if (a == "--trace-wide") trace_wide = true;
         else if (a == "--wide-everywhere") wide_everywhere = true;
         else if (a == "--hud-edges") hud_edges = true;
+        else if (a == "--patch") patch_files.push_back(next());
+        // Character mods: <name>.ini files with [Palette] and [Stats].
+        else if (a == "--characters") characters_dir = next();
+        // Graphics replacements, as the frontend's Mods/Textures: Mega Drive
+        // tiles (md_<hash>.png), plane text by tile sequence (mdtext_*.txt
+        // with .png), text by sprite (mdsprite_*.txt with .png) and 32X
+        // sprites (32x_*.png) from DIR; and the dump of what is drawn, with
+        // the plane text runs and the sprite groups on screen in DIR/Text
+        // (--dump-tiles is its older name).
+        else if (a == "--tiles") tiles_dir = next();
+        else if (a == "--dump-graphics" || a == "--dump-tiles") dump_tiles_dir = next();
+        // Whole-bank sprite sheets (renderer/sprite_sheet.h): the characters'
+        // banks from the ROM, and the banks the scene has loaded at the end of
+        // the run.
+        else if (a == "--export-sheets") export_sheets_dir = next();
+        else if (a == "--backdrop") { backdrop_key = next(); backdrop_dir = next(); }
+        else if (a == "--game-font") game_font_png = next();
+        else if (a == "--layer") debug_layer = next() == "md" ? 1 : 2;  // md | 32x: one layer in the shots
+        else if (a == "--sprites") want_sprites = true;
+        else if (a == "--sprites-check") want_sprites = sprites_check = true;
+        else if (a == "--sprites-oracle") {
+            const std::vector<std::string> parts = split(next(), ':');
+            oracle_calls = std::atoi(parts[0].c_str());
+            if (parts.size() > 1) oracle_seed = uint32_t(std::strtoul(parts[1].c_str(), nullptr, 10));
+        }
+        else if (a == "--sprites-log") {
+            want_sprites = true;
+            for (auto& s : split(next(), ',')) sprites_log.insert(std::strtoull(s.c_str(), nullptr, 10));
+        }
         else if (a == "--cheat") {
             // A built-in cheat by its key, or Action Replay codes.
             const std::string c = next();
@@ -331,6 +575,16 @@ int main(int argc, char** argv) {
         else if (a == "--three-button") six_button = 0;
         else if (a == "--audio") { want_audio = true; }
         else if (a == "--sram") sram_path = next();
+        else if (a == "--peek-every") {
+            // N:ADDR:BYTES, ADDR in hex: prints those 68K work RAM bytes every
+            // N frames (tests measure what the game did, a player's speed say).
+            auto parts = split(next(), ':');
+            if (parts.size() < 3) { std::fprintf(stderr, "bad --peek-every\n"); return 2; }
+            Peek p{std::strtoull(parts[0].c_str(), nullptr, 10), uint32_t(std::strtoul(parts[1].c_str(), nullptr, 16) & 0xFFFF),
+                   uint32_t(std::strtoul(parts[2].c_str(), nullptr, 10))};
+            if (!p.every || !p.bytes || p.bytes > 64) { std::fprintf(stderr, "bad --peek-every\n"); return 2; }
+            peeks.push_back(p);
+        }
         else if (a == "--poke") {
             // FRAME:ADDR:BYTE, all but FRAME in hex: a 68K work RAM byte set
             // before that frame runs (tests reach states a script cannot).
@@ -339,6 +593,27 @@ int main(int argc, char** argv) {
             pokes.push_back({std::strtoull(parts[0].c_str(), nullptr, 10),
                              uint32_t(std::strtoul(parts[1].c_str(), nullptr, 16) & 0xFFFF),
                              uint8_t(std::strtoul(parts[2].c_str(), nullptr, 16))});
+        }
+        else if (a == "--poke-sdram") {
+            // FRAME:OFFSET:BYTE, the same for an SH-2 SDRAM byte (the special
+            // stage keeps its rings and its goal there).
+            auto parts = split(next(), ':');
+            if (parts.size() < 3) { std::fprintf(stderr, "bad --poke-sdram\n"); return 2; }
+            pokes.push_back({std::strtoull(parts[0].c_str(), nullptr, 10),
+                             uint32_t(std::strtoul(parts[1].c_str(), nullptr, 16) & 0x3FFFF),
+                             uint8_t(std::strtoul(parts[2].c_str(), nullptr, 16)), true});
+        }
+        else if (a == "--poke-fb") {
+            // FROM:TO:OFFSET:BYTE, a byte of both 32X frame buffers set before
+            // every frame from FROM to TO: the special stage's result at $1FF
+            // (1: cleared), which the SH-2 stores when the goal is reached
+            // ($060074BA) and the 68K reads after the stage.
+            auto parts = split(next(), ':');
+            if (parts.size() < 4) { std::fprintf(stderr, "bad --poke-fb\n"); return 2; }
+            const uint64_t from = std::strtoull(parts[0].c_str(), nullptr, 10), to = std::strtoull(parts[1].c_str(), nullptr, 10);
+            for (uint64_t fr = from; fr <= to; ++fr)
+                pokes.push_back({fr, uint32_t(std::strtoul(parts[2].c_str(), nullptr, 16) & 0x1FFFF),
+                                 uint8_t(std::strtoul(parts[3].c_str(), nullptr, 16)), false, true});
         }
         else if (a == "--replay-input") {
             const std::string path = next();
@@ -392,10 +667,80 @@ int main(int argc, char** argv) {
         else { std::fprintf(stderr, "unknown argument %s\n", a.c_str()); return 2; }
     }
     if (rom_path.empty()) { std::fprintf(stderr, "usage: chaotix_headless --rom <file> [--frames N] ...\n"); return 2; }
+    if (oracle_calls > 0) return sprite_oracle(rom_path, oracle_calls, oracle_seed) ? 6 : 0;
 
     auto m = std::make_unique<Machine>();
     std::string err;
     if (!m->load_rom(rom_path, &err)) { std::fprintf(stderr, "error: %s\n", err.c_str()); return 1; }
+    if (!patch_files.empty()) {
+        std::vector<std::string> messages;
+        const int applied = m->rom.apply_patches(patch_files, &messages);
+        for (const auto& msg : messages) std::printf("patch: %s\n", msg.c_str());
+        std::printf("patch: %d applied, %zu changed range(s)\n", applied, m->rom.patched.size());
+    }
+    // Character mods: the stats are a data patch over the ROM (after the patch
+    // files), on every machine below that runs the same game; the colours are
+    // output only, one CharacterPalettes shared by them all.
+    std::vector<CharacterMod> character_mods;
+    std::shared_ptr<CharacterPalettes> character_palettes;
+    if (!characters_dir.empty()) {
+        std::vector<std::string> messages;
+        character_mods = load_character_mods(characters_dir, &messages);
+        const int changed = m->rom.apply_edits(stat_edits(m->rom, character_mods, &messages), &messages);
+        for (const auto& msg : messages) std::printf("characters: %s\n", msg.c_str());
+        character_palettes = std::make_shared<CharacterPalettes>(m->rom, character_mods);
+        if (character_palettes->empty()) character_palettes = nullptr;
+        std::printf("characters: %zu file(s), stats changed %d byte(s), %s\n", character_mods.size(), changed,
+                    character_palettes ? "colours replaced" : "no colours");
+        m->characters = character_palettes;
+    }
+    if (!game_font_png.empty()) {
+        GameFont font;
+        std::string why;
+        if (!build_game_font(m->rom.data, font, &why)) { std::printf("game font: %s\n", why.c_str()); return 1; }
+        std::printf("game font: %d glyphs of %dx%d\n", font.glyph_count, GameFont::kGlyphW, GameFont::kGlyphH);
+        if (!write_png(game_font_png, font.pixels.data(), font.width, font.height, font.width)) return 1;
+        if (backdrop_key.empty()) return 0;
+    }
+    if (!backdrop_key.empty()) {
+        int failed = 0;
+        // PLACE:LEVEL:TIME[:WIDE] tries a stage that is not one of the list.
+        std::vector<BackdropSpec> specs = backdrop_specs();
+        std::string custom_key;
+        if (backdrop_key.find(':') != std::string::npos) {
+            const auto parts = split(backdrop_key, ':');
+            BackdropSpec s;
+            s.place = uint16_t(std::atoi(parts[0].c_str()));
+            s.level = parts.size() > 1 ? uint16_t(std::atoi(parts[1].c_str())) : 1;
+            s.attime = parts.size() > 2 ? uint16_t(std::atoi(parts[2].c_str())) : 0;
+            s.wide = parts.size() > 3 ? std::atoi(parts[3].c_str()) != 0 : true;
+            custom_key = "custom_" + parts[0] + "_" + std::to_string(s.level) + "_" + std::to_string(s.attime);
+            s.key = custom_key.c_str();
+            specs = {s};
+            backdrop_key = "all";
+        }
+        for (const BackdropSpec& spec : specs) {
+            if (backdrop_key != "all" && backdrop_key != spec.key) continue;
+            BackdropImage img;
+            std::string why;
+            const auto t0 = std::chrono::steady_clock::now();
+            const bool ok = render_backdrop(m->rom, spec, img, &why);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            if (!ok) { std::printf("backdrop %s: %s\n", spec.key, why.c_str()); ++failed; continue; }
+            const std::string path = backdrop_dir + "/" + spec.key + ".png";
+            write_png(path, img.pixels.data(), img.width, img.height, img.width);
+            std::printf("backdrop %s: %dx%d in %.0f ms, tint %08X, %d of %d sprites left out -> %s\n", spec.key,
+                        img.width, img.height, ms, unsigned(backdrop_tint(img)), img.hidden_draws, img.sprite_draws,
+                        path.c_str());
+        }
+        return failed ? 1 : 0;
+    }
+    // The same data patch on another machine, so that it runs the same game.
+    auto same_rom = [&](Machine& o) {
+        if (!patch_files.empty()) o.rom.apply_patches(patch_files, nullptr);
+        if (!character_mods.empty()) o.rom.apply_edits(stat_edits(o.rom, character_mods, nullptr), nullptr);
+        o.characters = character_palettes;
+    };
     m->reset();
     m->audio_enabled = !wav_path.empty() || want_audio;
     m->profile = profile;
@@ -404,6 +749,41 @@ int main(int argc, char** argv) {
     m->wide_extra_bottom = wide_bottom;
     m->wide_everywhere = wide_everywhere;
     m->wide_hud_edges = hud_edges;
+    m->debug_layer = debug_layer;
+    if (!tiles_dir.empty() || !dump_tiles_dir.empty()) {
+        // Output only: the --lockstep reference draws with the same tiles,
+        // so the machines' state and their pictures must still be identical.
+        m->vdp.tiles = std::make_shared<TileReplacer>();
+        std::vector<std::string> messages;
+        if (!tiles_dir.empty())
+            std::printf("tiles: %d replacement(s) loaded\n", load_tile_pack(*m->vdp.tiles, tiles_dir, &messages));
+        for (const auto& msg : messages) std::printf("tiles: %s\n", msg.c_str());
+        if (!tiles_dir.empty()) {
+            // Text replaced by tile sequence (mdtext_<name>.txt + .png) and
+            // by sprite (mdsprite_<name>.txt + .png), counted together.
+            messages.clear();
+            std::printf("text: %d pattern(s) loaded\n", load_text_pack(*m->vdp.tiles, tiles_dir, &messages));
+            for (const auto& msg : messages) std::printf("text: %s\n", msg.c_str());
+        }
+        m->vdp.tiles->dumping = !dump_tiles_dir.empty();
+    }
+    // 32X sprite replacements from the same folder; the recorder is only
+    // installed when there are some, or for dumping.
+    std::shared_ptr<SpritePack> sprite_pack;
+    if (!tiles_dir.empty()) {
+        sprite_pack = std::make_shared<SpritePack>();
+        std::vector<std::string> messages;
+        std::printf("sprites: %d replacement(s) loaded\n", load_sprite_pack(*sprite_pack, tiles_dir, &messages));
+        for (const auto& msg : messages) std::printf("sprites: %s\n", msg.c_str());
+        if (sprite_pack->empty()) sprite_pack = nullptr;
+    }
+    if (sprite_pack || !dump_tiles_dir.empty()) want_sprites = true;
+    if (want_sprites) {
+        m->sprites = std::make_shared<SpriteRecorder>();
+        m->sprites->track_writes = sprites_check;
+        m->sprites->set_pack(sprite_pack);
+        m->sprites->dumping = !dump_tiles_dir.empty();
+    }
     if (six_button >= 0) m->input.six_button[0] = m->input.six_button[1] = six_button != 0;
     if (!sram_path.empty()) {
         // Cartridge saves change what the game does, so a replay of somebody
@@ -426,12 +806,26 @@ int main(int argc, char** argv) {
     if (lockstep) {
         ref = std::make_unique<Machine>();
         ref->load_rom(rom_path, &err);
+        same_rom(*ref);
         ref->reset();
         ref->wide_enabled = wide > 0 || wide_bottom > 0 || wide_at > 0 || wide_at_bottom > 0;
         ref->wide_extra = wide;
         ref->wide_extra_bottom = wide_bottom;
         ref->wide_everywhere = wide_everywhere;
         ref->wide_hud_edges = hud_edges;
+        ref->vdp.tiles = m->vdp.tiles;  // the same picture, so the output images compare too
+        // The same save and the same pad, or the two part at the first
+        // DATA LOAD or the first read of the controller.
+        std::copy(m->sram, m->sram + sizeof m->sram, ref->sram);
+        ref->input.six_button[0] = m->input.six_button[0];
+        ref->input.six_button[1] = m->input.six_button[1];
+        // Its own recorder: the interpreter must record the same draws as
+        // the recompiled code (compared every frame below).
+        // With the same replacements, so that its pictures compare too.
+        if (want_sprites) {
+            ref->sprites = std::make_shared<SpriteRecorder>();
+            ref->sprites->set_pack(sprite_pack);
+        }
         if (!rs.active) std::printf("warning: --lockstep without generated code compares the interpreter with itself\n");
     }
     audio::MusicMods music;
@@ -450,9 +844,35 @@ int main(int argc, char** argv) {
     if (compare_native && (wide > 0 || wide_bottom > 0)) {
         nat = std::make_unique<Machine>();
         nat->load_rom(rom_path, &err);
+        same_rom(*nat);
         nat->reset();
         centre_compare = true;
     }
+    uint64_t start_frame = 0;
+    if (!load_state_path.empty()) {
+        std::vector<uint8_t> file;
+        std::string why;
+        savestate::Info info;
+        if (!savestate::read_file(load_state_path, file)) {
+            std::fprintf(stderr, "cannot open %s\n", load_state_path.c_str());
+            return 2;
+        }
+        if (!savestate::load(*m, file, &why, nullptr, &info) || (ref && !savestate::load(*ref, file, &why))) {
+            std::fprintf(stderr, "cannot load %s: %s\n", load_state_path.c_str(), why.c_str());
+            return 2;
+        }
+        start_frame = m->frame_count;
+        // A 4:3 comparison machine would have to start from the same moment.
+        nat.reset();
+        centre_compare = false;
+        std::printf("state: loaded %s (frame %llu, %zu bytes, %zu raw)\n", load_state_path.c_str(),
+                    (unsigned long long)info.frame, file.size(), info.raw_size);
+    }
+    RewindBuffer rewind;
+    rewind.set_budget(rewind_budget_mb << 20);
+    std::map<uint64_t, uint64_t> rewind_hashes;  // snapshot frame -> state fingerprint
+    double rewind_push_ms = 0, rewind_push_worst = 0;
+    uint64_t rewind_pushes = 0;
     uint64_t centre_ok_frames = 0;
     int centre_worst = 0;  // most pixels a compared frame differed by (special stage only)
     uint64_t lockstep_ok_frames = 0;
@@ -504,10 +924,15 @@ int main(int argc, char** argv) {
         }
         std::printf("achievements: %zu definitions, %d points\n", tracker.list().size(), tracker.points_total());
     }
+    SpriteCanvas sprite_canvas;
+    SpriteCheck sprite_total;
+    uint64_t sprites_key = ~0ull, sprite_pictures = 0, sprite_bad_pictures = 0;
+    int sprites_dumped = 0;
+    uint64_t sprite_others_changed = 0;  // --sprites-check with a pack: see check_composed_others
     double worst_ms = 0;
-    uint64_t worst_frame = 0, slow_frames = 0, sram_frames = 0;
+    uint64_t worst_frame = 0, slow_frames = 0, sram_frames = 0, sram_last = 0;
     auto t0 = std::chrono::steady_clock::now();
-    for (uint64_t f = 0; f < frames; ++f) {
+    for (uint64_t f = start_frame; f < frames; ++f) {
         uint16_t btn = 0;
         for (const auto& p : presses)
             if (f >= p.frame && f < p.frame + p.duration) btn |= p.buttons;
@@ -584,14 +1009,25 @@ int main(int argc, char** argv) {
         g_trace_on = g_trace && f >= trace_from && f < trace_to;
         for (const Poke& p : pokes)
             if (p.frame == f) {
-                m->wram[p.addr] = p.value;
-                if (ref) ref->wram[p.addr] = p.value;
+                for (Machine* x : {m.get(), ref.get(), nat.get()}) {
+                    if (!x) continue;
+                    if (p.fb) x->mars.fb[0][p.addr] = x->mars.fb[1][p.addr] = p.value;
+                    else (p.sdram ? x->sdram : x->wram)[p.addr] = p.value;
+                }
             }
         cheats::apply(*m, cheat_writes);
         if (ref) cheats::apply(*ref, cheat_writes);
         const size_t first_sample = m->audio_out.size();
         const auto frame_t0 = std::chrono::steady_clock::now();
         m->run_frame();
+        if (!dump_tiles_dir.empty() && m->vdp.tiles) {
+            write_tile_dumps(*m->vdp.tiles, dump_tiles_dir);
+            // The plane text on screen, for mdtext_ patterns (the lockstep
+            // reference shares the replacer and lists nothing new).
+            write_text_dumps(*m->vdp.tiles, dump_tiles_dir + "/Text", m->framebuffer, m->fb_width, m->fb_height,
+                             kScreenWidth, m->fb_extra);
+        }
+        if (!dump_tiles_dir.empty() && m->sprites) sprites_dumped += write_sprite_dumps(*m->sprites, dump_tiles_dir);
         {
             // The worst frames, not just the average: a stall now and then
             // shows up as lag even when the average is far below 16 ms.
@@ -600,7 +1036,7 @@ int main(int argc, char** argv) {
             if (ms > 8.0) ++slow_frames;
             // And how often the save changed: the frontend writes it to disk
             // a second after a change.
-            if (m->sram_dirty) { ++sram_frames; m->sram_dirty = false; }
+            if (m->sram_dirty) { ++sram_frames; sram_last = f; m->sram_dirty = false; }
         }
         if (!music_dir.empty()) music.after_frame(*m, first_sample);
         if (m->wide_active) {
@@ -657,7 +1093,42 @@ int main(int argc, char** argv) {
                 dump_state(*m);
                 return 3;
             }
+            if (ref->sprites) {
+                for (int b = 0; b < 2; ++b) {
+                    const std::string sd = compare_sprite_lists(ref->sprites->list(b), m->sprites->list(b));
+                    if (sd.empty()) continue;
+                    std::printf("LOCKSTEP DIVERGENCE at frame %llu (reference vs recompiled): sprite list of buffer %d: %s\n",
+                                (unsigned long long)m->frame_count, b, sd.c_str());
+                    return 3;
+                }
+            }
             ++lockstep_ok_frames;
+        }
+        if (m->sprites) {
+            const SpriteList& shown = m->sprites->displayed(*m);
+            if (sprites_log.count(m->frame_count)) {
+                std::printf("sprites: frame %llu, buffer %d on display, %zu draws\n", (unsigned long long)m->frame_count,
+                            m->mars.fb_display, shown.draws.size());
+                for (size_t k = 0; k < shown.draws.size(); ++k) std::printf("  %3zu %s\n", k, describe(shown.draws[k]).c_str());
+            }
+            // Each picture once: a buffer's list starts again (a new serial)
+            // when it becomes the back buffer.
+            const uint64_t key = shown.serial << 1 | m->mars.fb_display;
+            if (sprites_check && key != sprites_key) {
+                sprites_key = key;
+                const SpriteCheck r = check_sprites(*m, *m->sprites, sprite_canvas);
+                ++sprite_pictures;
+                sprite_total.compared += r.compared;
+                sprite_total.wrong += r.wrong;
+                sprite_total.missing += r.missing;
+                sprite_total.extra += r.extra;
+                sprite_total.covered += r.covered;
+                if (r.mismatches()) {
+                    ++sprite_bad_pictures;
+                    if (sprite_bad_pictures <= 8) report_sprite_mismatch(*m, r, shown);
+                }
+                if (m->sprites->pack()) sprite_others_changed += check_composed_others(*m, *m->sprites);
+            }
         }
         if (nat && centre_compare) {
             nat->input.pad[0] = btn;
@@ -676,11 +1147,15 @@ int main(int argc, char** argv) {
                 // and a clipped polygon's edge can land a pixel apart, so
                 // there a frame may differ along polygon edges (measured: at
                 // most 1.8% of the picture) but not in what is drawn.
+                // The bonus stage and the results screen are drawn by the
+                // same code with the screen's rectangle (issues #38, #39).
                 const bool special = m->wide_special;
-                const int x0 = special ? patches::kSpecialRect[0] : 0;
-                const int x1 = special ? patches::kSpecialRect[1] + 1 : nat->fb_width;
-                const int y0 = special ? patches::kSpecialRect[2] : 0;
-                const int y1 = special ? patches::kSpecialRect[3] + 1 : nat->fb_height;
+                const int16_t* rect = patches::PolyScene(m->poly_scene) == patches::PolyScene::Stage
+                                          ? patches::kSpecialRect : patches::kFullRect;
+                const int x0 = special ? rect[0] : 0;
+                const int x1 = special ? rect[1] + 1 : nat->fb_width;
+                const int y0 = special ? rect[2] : 0;
+                const int y1 = special ? rect[3] + 1 : nat->fb_height;
                 const int allowed = special ? (x1 - x0) * (y1 - y0) / 40 : 0;
                 int differ = 0, dx = -1, dy = -1;
                 for (int y = y0; y < y1; ++y)
@@ -720,6 +1195,36 @@ int main(int argc, char** argv) {
             std::printf("hash %llu %016llx\n", (unsigned long long)m->frame_count,
                         (unsigned long long)image_hash(m->framebuffer, m->fb_width, m->fb_height, kScreenWidth));
         if (state_every && m->frame_count % state_every == 0) dump_state(*m);
+        if (state_hash_every && m->frame_count % state_hash_every == 0)
+            std::printf("statehash %llu %016llx\n", (unsigned long long)m->frame_count,
+                        (unsigned long long)savestate::state_hash(*m));
+        if (auto it = save_states.find(m->frame_count); it != save_states.end()) {
+            const std::vector<uint8_t> file = savestate::save(*m);
+            for (const std::string& path : it->second) {
+                if (!savestate::write_file(path, file)) { std::fprintf(stderr, "cannot write %s\n", path.c_str()); return 2; }
+                std::printf("state: saved %s at frame %llu (%zu bytes, %zu raw)\n", path.c_str(),
+                            (unsigned long long)m->frame_count, file.size(), savestate::raw_size(savestate::kPicture));
+            }
+        }
+        if (rewind_interval && m->frame_count % uint64_t(rewind_interval) == 0) {
+            const auto r0 = std::chrono::steady_clock::now();
+            rewind.push(*m);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - r0).count();
+            rewind_push_ms += ms;
+            rewind_push_worst = std::max(rewind_push_worst, ms);
+            ++rewind_pushes;
+            std::vector<uint8_t> raw;
+            savestate::serialize(*m, raw, 0);
+            uint64_t h = 1469598103934665603ull;
+            for (uint8_t b : raw) h = (h ^ b) * 1099511628211ull;
+            rewind_hashes[m->frame_count] = h;
+        }
+        for (const Peek& p : peeks)
+            if (m->frame_count % p.every == 0) {
+                std::printf("peek %llu %04X ", (unsigned long long)m->frame_count, unsigned(p.addr));
+                for (uint32_t i = 0; i < p.bytes; ++i) std::printf("%02X", m->wram[(p.addr + i) & 0xFFFF]);
+                std::printf("\n");
+            }
     }
     double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     std::printf("ran %llu frames in %.2fs (%.1f fps)\n", (unsigned long long)frames, secs, frames / secs);
@@ -727,6 +1232,11 @@ int main(int argc, char** argv) {
         std::printf("widescreen: margins live for %llu frames in %d stretches\n",
                     (unsigned long long)wide_live_frames, wide_stretches);
     print_recomp_stats(*m);
+    // Whether the game saved, and when: tests check that a finished level
+    // reaches the cartridge save, and that a time attack run does not.
+    std::printf("save RAM changed on %llu frames", (unsigned long long)sram_frames);
+    if (sram_frames) std::printf(", the last at frame %llu", (unsigned long long)sram_last);
+    std::printf("\n");
     if (profile) {
 
         static const char* names[PROF_COUNT] = {"68K", "Z80", "MSH2", "SSH2", "video", "audio/pwm"};
@@ -737,7 +1247,6 @@ int main(int argc, char** argv) {
         std::printf(" | total %.3f\n", total / 1e6 / double(frames));
         std::printf("worst frame %.3f ms (frame %llu), %llu frames over 8 ms\n", worst_ms,
                     (unsigned long long)worst_frame, (unsigned long long)slow_frames);
-        std::printf("save RAM changed on %llu frames\n", (unsigned long long)sram_frames);
     }
     if (!wav_path.empty()) {
         if (write_wav(wav_path, wav, int(kAudioRate + 0.5))) std::printf("audio written to %s (%zu samples)\n", wav_path.c_str(), wav.size() / 2);
@@ -750,6 +1259,34 @@ int main(int argc, char** argv) {
     if (compare_native) std::printf("centre check: %llu widescreen frames with a 4:3 identical centre\n", (unsigned long long)centre_ok_frames);
     if (compare_native && centre_worst) std::printf("centre check: special stage frames differ along polygon edges by at most %d pixels\n", centre_worst);
     if (ref) std::printf("lockstep: %llu frames bit-identical between interpreter and recompiled execution\n", (unsigned long long)lockstep_ok_frames);
+    if (character_palettes)
+        std::printf("characters: displayed palette worked out %llu times (%llu blocks left as they were), %d colour block(s) replaced at the end\n",
+                    (unsigned long long)character_palettes->recomputed(), (unsigned long long)character_palettes->refused(),
+                    character_palettes->substituted());
+    if (m->sprites) {
+        const SpriteRecorder& sr = *m->sprites;
+        std::printf("sprites: %llu draws recorded (%llu not in the bank table, %llu unreadable), %llu flips\n",
+                    (unsigned long long)sr.draws_recorded, (unsigned long long)sr.unknown_graphics,
+                    (unsigned long long)sr.bad_graphics, (unsigned long long)sr.flips);
+        if (sr.pack())
+            std::printf("sprites: %llu pictures composed with replacements\n", (unsigned long long)sr.pictures_composed);
+        if (sr.dumping) std::printf("sprites: %d graphics dumped\n", sprites_dumped);
+    }
+    if (sprites_check)
+        std::printf("sprites check: %llu pictures, %llu bytes compared, %llu mismatches (wrong %llu, missing %llu, extra %llu) in %llu pictures, %llu bytes drawn over by polygons or fills\n",
+                    (unsigned long long)sprite_pictures, (unsigned long long)sprite_total.compared,
+                    (unsigned long long)sprite_total.mismatches(), (unsigned long long)sprite_total.wrong,
+                    (unsigned long long)sprite_total.missing, (unsigned long long)sprite_total.extra,
+                    (unsigned long long)sprite_bad_pictures, (unsigned long long)sprite_total.covered);
+    if (sprites_check && m->sprites->pack())
+        std::printf("sprites check: %llu bytes of polygons and fills shown changed by the replacements\n",
+                    (unsigned long long)sprite_others_changed);
+    if (!export_sheets_dir.empty()) {
+        std::vector<std::string> messages;
+        const int n = export_sprite_sheets(*m, export_sheets_dir, &messages);
+        for (const auto& msg : messages) std::printf("sheets: %s\n", msg.c_str());
+        std::printf("sheets: %d written to %s\n", n, export_sheets_dir.c_str());
+    }
     if (!coverage_path.empty()) {
         if (cov.save(coverage_path)) std::printf("coverage written to %s (%zu entries)\n", coverage_path.c_str(), cov.size());
     }
@@ -764,5 +1301,35 @@ int main(int argc, char** argv) {
                     w16(0xE03A), m->wram[0xE05C], w16(0xE052));
     }
     dump_state(*m);
+    if (rewind_interval && rewind_pushes) {
+        // Every snapshot still held, newest first, must be the state it was
+        // taken from.
+        const size_t held = rewind.snapshots();
+        const uint64_t oldest = rewind.oldest_frame(), newest = rewind.newest_frame();
+        std::printf("rewind: %llu snapshots every %d frames, push %.3f ms average, %.3f ms worst (%.3f ms per frame)\n",
+                    (unsigned long long)rewind_pushes, rewind_interval, rewind_push_ms / double(rewind_pushes),
+                    rewind_push_worst, rewind_push_ms / double(frames - start_frame));
+        std::printf("rewind: %zu held in %.1f MB of %zu MB, frames %llu..%llu (%.1f s)\n", held,
+                    double(rewind.memory()) / 1048576.0, rewind_budget_mb, (unsigned long long)oldest,
+                    (unsigned long long)newest, double(newest - oldest) / 60.0);
+        size_t verified = 0, wrong = 0;
+        double step_worst = 0;
+        std::vector<uint8_t> raw;
+        for (;;) {
+            const auto r0 = std::chrono::steady_clock::now();
+            const bool more = rewind.step_back(*m);
+            step_worst = std::max(step_worst, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - r0).count());
+            savestate::serialize(*m, raw, 0);
+            uint64_t h = 1469598103934665603ull;
+            for (uint8_t b : raw) h = (h ^ b) * 1099511628211ull;
+            auto it = rewind_hashes.find(m->frame_count);
+            if (it == rewind_hashes.end() || it->second != h) ++wrong; else ++verified;
+            if (!more) break;
+        }
+        std::printf("rewind: stepped back through %zu snapshots, %zu restored exactly, %zu wrong, step %.3f ms worst\n",
+                    verified + wrong, verified, wrong, step_worst);
+        if (wrong || verified != held) return 7;
+    }
+    if (sprites_check && sprite_total.mismatches()) return 6;
     return hash_failures ? 4 : 0;
 }
