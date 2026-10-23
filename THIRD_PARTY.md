@@ -33,8 +33,10 @@ screen is what runs when nothing is installed yet.
 - Files: `assets/icon/icon.png`, `assets/icon/icon_64.rgba`,
   `platforms/windows/app.ico`, `platforms/android/app/src/main/res/mipmap-*/ic_launcher.png`
   (the macOS and iOS icons are scaled from `icon.png` when they are packaged)
-- Pixel art of Knuckles by [Abdouxgo](https://github.com/Abdouxgo), contributed
-  in [issue #22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22);
+- Pixel art of Knuckles by Cotton_Candy_2C, from
+  [SteamGridDB](https://www.steamgriddb.com/icon/22213). It was suggested by
+  [Abdouxgo](https://github.com/Abdouxgo) in
+  [issue #22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22);
   the background was made transparent and the sizes scaled from it. Knuckles
   is a Sega character; see [LEGAL.md](LEGAL.md).
 

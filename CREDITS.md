@@ -15,8 +15,10 @@ people below. Thank you all: every report here led to a fix or a feature.
 
 ## Art
 
-- **[Abdouxgo](https://github.com/Abdouxgo)**: the app icon
-  ([#22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22)).
+- **Cotton_Candy_2C**: the pixel art of Knuckles used as the app icon, from
+  [SteamGridDB](https://www.steamgriddb.com/icon/22213).
+- **[Abdouxgo](https://github.com/Abdouxgo)**: suggesting that art as the app
+  icon ([#22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22)).
 
 ## Reports and ideas
 
@@ -45,8 +47,8 @@ people below. Thank you all: every report here led to a fix or a feature.
 - **[mechasalesman](https://github.com/mechasalesman)**: widescreen in the
   lobby, and cheats ([#13](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/13),
   [#20](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/20)).
-- **[Abdouxgo](https://github.com/Abdouxgo)**: 32-bit Android, and icon
-  designs ([#19](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/19),
+- **[Abdouxgo](https://github.com/Abdouxgo)**: 32-bit Android, and the icon
+  suggestion ([#19](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/19),
   [#22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22)).
 - **[ZacOnGH](https://github.com/ZacOnGH)**: the Linux build
   ([#23](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/23)).
