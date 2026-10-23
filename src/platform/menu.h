@@ -51,6 +51,14 @@ public:
         // button) instead of START GAME: the player goes on from the game's
         // own title screen.
         std::function<void()> front_closed;
+        // Save states (issue #40), in slots 1..kStateSlots: save or load one
+        // (the app says how it went), what a slot holds ("EMPTY", or when it
+        // was saved), and why states cannot be used just now (a TIME ATTACK
+        // run), empty when they can.
+        std::function<void(int slot)> save_state;
+        std::function<void(int slot)> load_state;
+        std::function<std::string(int slot)> state_info;
+        std::function<std::string()> states_locked;
     };
 
     void set_hooks(Hooks h) { hooks_ = std::move(h); }
@@ -101,7 +109,7 @@ private:
     // OPTIONS is a list of categories; each category is a page of its own, so
     // that no page runs off a phone's screen.
     enum class Page { Closed, Front, Main, Options, Video, Sound, Input, Extras, Controls, Keys, TimeAttack,
-                      Achievements, Cheats };
+                      Achievements, Cheats, States, StateKeys };
 
     struct Item {
         std::string label;
@@ -139,6 +147,11 @@ private:
     void build_controls();
     void build_time_attack();
     void build_keys();
+    void build_states();
+    void build_state_keys();
+    // The setting a host-key capture writes (fast-forward, save state, ...),
+    // or null when awaiting_ is a Mega Drive button.
+    std::string* capture_target(const std::string& what) const;
     void move(int delta);
     void activate(int step);
     // Escape, the menu button or the pad's back button: one level up, or

@@ -42,6 +42,7 @@ bool Menu::is_row_page(Page p) { return p == Page::Main; }
 
 bool Menu::is_list_page(Page p) {
     return p == Page::Front || p == Page::Options || p == Page::Controls || p == Page::Keys ||
+           p == Page::States || p == Page::StateKeys ||
            p == Page::TimeAttack || p == Page::Cheats || p == Page::Video || p == Page::Sound ||
            p == Page::Input || p == Page::Extras;
 }
@@ -51,7 +52,7 @@ Menu::Page Menu::parent_of(Page p) {
     switch (p) {
     case Page::Video: case Page::Sound: case Page::Input: case Page::Extras: return Page::Options;
     case Page::Cheats: return Page::Extras;
-    case Page::Keys: return Page::Controls;
+    case Page::Keys: case Page::StateKeys: return Page::Controls;
     default: return Page::Closed;
     }
 }
@@ -73,6 +74,8 @@ void Menu::set_page(Page p) {
     else if (p == Page::Extras) build_extras();
     else if (p == Page::Controls) build_controls();
     else if (p == Page::Keys) build_keys();
+    else if (p == Page::States) build_states();
+    else if (p == Page::StateKeys) build_state_keys();
     else if (p == Page::TimeAttack) build_time_attack();
     else if (p == Page::Cheats) build_cheats();
     else items_.clear();
@@ -97,6 +100,8 @@ bool Menu::show_page(const std::string& name) {
         set_page(Page::Keys);
     }
     else if (name == "main") set_page(Page::Main);
+    else if (name == "states") set_page(Page::States);
+    else if (name == "statekeys") set_page(Page::StateKeys);
     else if (name == "options") set_page(Page::Options);
     else if (name == "video") set_page(Page::Video);
     else if (name == "sound") set_page(Page::Sound);
@@ -121,6 +126,8 @@ std::string Menu::page_name() const {
     case Page::TimeAttack: return "timeattack";
     case Page::Achievements: return "awards";
     case Page::Cheats: return "cheats";
+    case Page::States: return "states";
+    case Page::StateKeys: return "statekeys";
     default: return "";
     }
 }
@@ -160,6 +167,9 @@ void Menu::build_front() {
 void Menu::build_main() {
     items_.clear();
     items_.push_back({"RESUME", {}, [this](int) { close(); }});
+    // Save states and rewind (issue #40): a page of their own, so that the
+    // row stays short enough for a phone.
+    items_.push_back({"STATES", {}, [this](int) { set_page(Page::States); }});
     items_.push_back({"OPTIONS", {}, [this](int) { set_page(Page::Options); }});
     items_.push_back({"CONTROLS", {}, [this](int) { set_page(Page::Controls); }});
     items_.push_back({"AWARDS", {}, [this](int) { set_page(Page::Achievements); }});
@@ -219,9 +229,22 @@ const MenuButtonChoice kFastForwardButtons[] = {
     {"none", "NONE"},
 };
 constexpr int kFastForwardButtonCount = int(sizeof kFastForwardButtons / sizeof kFastForwardButtons[0]);
-// What awaiting_ holds while the fast-forward key is being captured; the key
-// page's captures are Mega Drive button names, which this is not.
+// What awaiting_ holds while a host key (fast-forward, save states, rewind)
+// is being captured; the key page's captures are Mega Drive button names,
+// which these are not.
 const char kFastForwardCapture[] = "fast forward";
+const char kSaveStateCapture[] = "save state";
+const char kLoadStateCapture[] = "load state";
+const char kSlotCapture[] = "next slot";
+const char kRewindCapture[] = "rewind";
+
+// The gamepad buttons the host's own functions may use: the menu button's
+// choices, the triggers, and NONE.
+const MenuButtonChoice* pad_choice(const std::string& name) {
+    for (const MenuButtonChoice& b : kFastForwardButtons)
+        if (name == b.name) return &b;
+    return nullptr;
+}
 
 std::string upper(std::string v) {
     for (char& c : v) c = char(std::toupper((unsigned char)c));
@@ -291,7 +314,9 @@ void Menu::build_controls() {
                               if (c->menu_button == kMenuButtons[k].name) i = k;
                           // Not the fast-forward button: one button, one job.
                           do i = (i + step + kMenuButtonCount) % kMenuButtonCount;
-                          while (c->ff_button == kMenuButtons[i].name);
+                          while (c->ff_button == kMenuButtons[i].name || c->rewind_button == kMenuButtons[i].name ||
+                                 c->state_save_button == kMenuButtons[i].name ||
+                                 c->state_load_button == kMenuButtons[i].name);
                           c->menu_button = kMenuButtons[i].name;
                       }});
     // Fast-forward (issue #45): Tab and the right trigger to begin with.
@@ -315,10 +340,131 @@ void Menu::build_controls() {
                           for (int k = 0; k < kFastForwardButtonCount; ++k)
                               if (c->ff_button == kFastForwardButtons[k].name) i = k;
                           do i = (i + step + kFastForwardButtonCount) % kFastForwardButtonCount;
-                          while (c->menu_button == kFastForwardButtons[i].name);
+                          while (c->menu_button == kFastForwardButtons[i].name ||
+                                 (std::string(kFastForwardButtons[i].name) != "none" &&
+                                  (c->rewind_button == kFastForwardButtons[i].name ||
+                                   c->state_save_button == kFastForwardButtons[i].name ||
+                                   c->state_load_button == kFastForwardButtons[i].name)));
                           c->ff_button = kFastForwardButtons[i].name;
                       }});
+    // Issue #40: the keys and buttons for save states and rewind, on a page of
+    // their own (this one is as long as a phone's screen allows).
+    items_.push_back({"STATES AND REWIND", {}, [this](int) { set_page(Page::StateKeys); }});
     items_.push_back({"BACK", {}, [this](int) { const Page back = return_to_; set_page(back); }});
+}
+
+std::string* Menu::capture_target(const std::string& what) const {
+    if (!cfg_) return nullptr;
+    if (what == kFastForwardCapture) return &cfg_->ff_key;
+    if (what == kSaveStateCapture) return &cfg_->state_save_key;
+    if (what == kLoadStateCapture) return &cfg_->state_load_key;
+    if (what == kSlotCapture) return &cfg_->state_slot_key;
+    if (what == kRewindCapture) return &cfg_->rewind_key;
+    return nullptr;
+}
+
+// Save states (issue #40), from the pause menu: the slot quick save and quick
+// load use, and rewind on or off. Saving or loading closes the menu: the
+// player wants the game, and the message says how it went.
+void Menu::build_states() {
+    items_.clear();
+    Config* c = cfg_;
+    if (!c) return;
+    auto locked = [this] { return hooks_.states_locked ? hooks_.states_locked() : std::string(); };
+    auto slot_note = [this, c, locked] {
+        const std::string why = locked();
+        if (!why.empty()) return why;
+        return hooks_.state_info ? hooks_.state_info(c->state_slot) : std::string();
+    };
+    items_.push_back({"SAVE STATE", {}, [this, c](int step) {
+        if (step != 0) return;
+        close();
+        if (hooks_.save_state) hooks_.save_state(c->state_slot);
+    }});
+    items_.push_back({"LOAD STATE", {}, [this, c](int step) {
+        if (step != 0) return;
+        close();
+        if (hooks_.load_state) hooks_.load_state(c->state_slot);
+    }});
+    items_.push_back({"SLOT",
+                      [c] { return std::to_string(c->state_slot); },
+                      [this, c, slot_note](int s) {
+                          if (!s) return;
+                          c->state_slot = (c->state_slot - 1 + s + kStateSlots) % kStateSlots + 1;
+                          // The note says what the slot holds, so it follows.
+                          items_[size_t(selected_)].note = slot_note();
+                      },
+                      slot_note()});
+    items_.push_back({"REWIND",
+                      [c] { return on_off(c->rewind); },
+                      [c](int s) { if (s) c->rewind = !c->rewind; },
+                      locked().empty() ? std::string("hold the rewind key or button") : locked()});
+    items_.push_back({"BACK", {}, [this](int) { set_page(return_to_); }});
+}
+
+// Rewind on or off, and the keys and buttons for save states and rewind
+// (CONTROLS > STATES AND REWIND). Keys are captured like the fast-forward
+// key; buttons step through the ones the game leaves alone, never one another
+// host function holds. Ten rows, as many as a phone's screen holds.
+void Menu::build_state_keys() {
+    items_.clear();
+    Config* c = cfg_;
+    if (!c) return;
+    items_.push_back({"REWIND",
+                      [c] { return on_off(c->rewind); },
+                      [c](int s) { if (s) c->rewind = !c->rewind; },
+                      "keep the last minute to step back through"});
+    items_.push_back({"TOUCH REWIND",
+                      [c] { return on_off(c->touch_rewind); },
+                      [c](int s) { if (s) c->touch_rewind = !c->touch_rewind; },
+                      "an on-screen button for it"});
+    auto key_row = [this](const char* label, const char* capture, std::string Config::*field) {
+        Config* cc = cfg_;
+        items_.push_back({label,
+                          [this, cc, capture, field] {
+                              if (awaiting_ == capture) return std::string("PRESS A KEY");
+                              const std::string& v = cc->*field;
+                              return v.empty() ? std::string("-") : upper(v);
+                          },
+                          [this, capture](int step) { if (step == 0) awaiting_ = capture; },
+                          {}, /*read_only=*/false, /*pressed=*/true});
+    };
+    key_row("SAVE STATE KEY", kSaveStateCapture, &Config::state_save_key);
+    key_row("LOAD STATE KEY", kLoadStateCapture, &Config::state_load_key);
+    key_row("NEXT SLOT KEY", kSlotCapture, &Config::state_slot_key);
+    key_row("REWIND KEY", kRewindCapture, &Config::rewind_key);
+    auto pad_row = [this](const char* label, std::string Config::*field) {
+        Config* cc = cfg_;
+        items_.push_back({label,
+                          [cc, field] {
+                              const MenuButtonChoice* b = pad_choice(cc->*field);
+                              return b ? std::string(b->label) : upper(cc->*field);
+                          },
+                          [cc, field](int step) {
+                              if (!step) return;
+                              int i = 0;
+                              for (int k = 0; k < kFastForwardButtonCount; ++k)
+                                  if (cc->*field == kFastForwardButtons[k].name) i = k;
+                              // Not a button the menu, fast-forward or the other two hold.
+                              auto taken = [cc, field](const std::string& name) {
+                                  if (name == "none") return false;
+                                  if (name == cc->menu_button || name == cc->ff_button) return true;
+                                  for (std::string Config::*other : {&Config::state_save_button, &Config::state_load_button,
+                                                                     &Config::rewind_button})
+                                      if (other != field && name == cc->*other) return true;
+                                  return false;
+                              };
+                              for (int tries = 0; tries < kFastForwardButtonCount; ++tries) {
+                                  i = (i + step + kFastForwardButtonCount) % kFastForwardButtonCount;
+                                  if (!taken(kFastForwardButtons[i].name)) break;
+                              }
+                              cc->*field = kFastForwardButtons[i].name;
+                          }});
+    };
+    pad_row("SAVE STATE PAD", &Config::state_save_button);
+    pad_row("LOAD STATE PAD", &Config::state_load_button);
+    pad_row("REWIND PAD", &Config::rewind_button);
+    items_.push_back({"BACK", {}, [this](int) { set_page(Page::Controls); }});
 }
 
 // TIME ATTACK: the fields the game's own stage select offers, in its order, so
@@ -688,10 +834,10 @@ bool Menu::on_key(SDL_Keycode key) {
         // Capturing a binding. Escape abandons it; on a gamepad page a key is
         // simply the wrong kind of answer and is ignored.
         if (key == SDLK_ESCAPE) awaiting_.clear();
-        else if (awaiting_ == kFastForwardCapture) {
+        else if (std::string* target = capture_target(awaiting_)) {
             const char* name = SDL_GetScancodeName(SDL_GetScancodeFromKey(key, nullptr));
-            if (cfg_ && name && *name) {
-                cfg_->ff_key = name;
+            if (name && *name) {
+                *target = name;
                 awaiting_.clear();
             }
         } else if (!keys_pad_ && cfg_) {
@@ -736,7 +882,7 @@ bool Menu::on_pad(Uint8 button) {
     if (!awaiting_.empty()) {
         // The mirror of the keyboard case: only a gamepad page takes a button.
         // The fast-forward key wants a key; the pad's back button gives up.
-        if (awaiting_ == kFastForwardCapture) {
+        if (capture_target(awaiting_)) {
             if (button == SDL_GAMEPAD_BUTTON_EAST) awaiting_.clear();
         } else if (keys_pad_ && cfg_) {
             const char* name = SDL_GetGamepadStringForButton(SDL_GamepadButton(button));
@@ -1012,6 +1158,8 @@ void Menu::draw_options(ui::Ui& g) {
                         : page_ == Page::Input ? "INPUT"
                         : page_ == Page::Extras ? "EXTRAS"
                         : page_ == Page::Controls ? "CONTROLS"
+                        : page_ == Page::States ? "SAVE STATES"
+                        : page_ == Page::StateKeys ? "STATES AND REWIND"
                         : page_ == Page::Keys
                               ? (keys_player_ == 0 ? (keys_pad_ ? "1P GAMEPAD" : "1P KEYBOARD")
                                                    : (keys_pad_ ? "2P GAMEPAD" : "2P KEYBOARD"))
@@ -1067,7 +1215,7 @@ void Menu::draw_options(ui::Ui& g) {
         y += this_h;
     }
 
-    const char* hint = page_ == Page::Keys
+    const char* hint = page_ == Page::Keys || page_ == Page::StateKeys
                            ? "Up/Down choose    Enter rebind    Esc back"
                            : "Up/Down choose    Left/Right change    Esc back";
     g.text(ui::Font::Small, x, y + g.px(8), hint, faint());

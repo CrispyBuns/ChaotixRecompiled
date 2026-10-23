@@ -116,6 +116,9 @@ and the app's Documents on iOS (the Files app's On My iPhone > Chaotix).
 | F7 | Achievements (the menu's Awards page) |
 | F11, Alt+Enter | Borderless fullscreen |
 | Tab (hold) | Fast-forward (on a pad, the right trigger; see Fast-forward below) |
+| F8 / F9 | Save state / load state, in the current slot (see Save states and rewind below) |
+| F10 | Next save state slot (1-4) |
+| Backspace (hold) | Rewind (on a pad, the left trigger) |
 | F12 | Screenshot |
 
 The menu is the front end: it is up as soon as the program starts, a screen of
@@ -236,6 +239,26 @@ button is not shown either), so every record is set at the game's own speed,
 nor while the menu is open. In the settings file: `FastForwardKey`,
 `FastForwardButton`, `TouchFastForward`, `FastForwardMode` (Hold | Toggle)
 and `FastForwardSpeed` (2x | 4x | Max) in `[Input]`.
+
+### Save states and rewind
+
+The pause menu's STATES page saves and loads the game in one of four slots
+(SLOT), and turns rewind on or off. F8 saves, F9 loads and F10 picks the next
+slot; holding Backspace (or the left trigger) steps back through the last
+minute of play, at twice the game's speed and without sound, and letting go
+plays on from there. CONTROLS > STATES AND REWIND rebinds the keys, gives
+saving and loading a pad button if wanted (none to begin with) and turns on
+an on-screen rewind button (TOUCH REWIND, off to begin with; `rew.bmp` in
+`Mods/Touch`). Rewind is on to begin with on computers and off on phones and
+tablets.
+
+A state is the whole machine, so loading one carries on exactly as the game
+would have from that moment; the cartridge save (the DATA slots) is never put
+back by a load or by rewinding. States are files in `States/` in the user data
+folder and survive restarting the program, but only load with the same ROM,
+ROM patches and version of this program. None of it works during a TIME
+ATTACK run, so a record is always one unbroken run. See
+[docs/SAVE_STATES.md](docs/SAVE_STATES.md).
 
 OPTIONS > EXTRAS has RESET AWARDS, which asks twice before locking everything again.
 
@@ -386,6 +409,11 @@ you have the right to use, please.
   `--replay-input` plays back a session the program recorded with
   `--record-input`, so that something only a person can do — finishing a level,
   say — can be studied here as often as needed.
+- `chaotix_headless --save-state FRAME:FILE` writes a save state after that
+  frame and `--load-state FILE` starts from one (the run then goes on to
+  `--frames`); `--state-hash-every N` prints a fingerprint of the whole
+  machine and `--rewind INTERVAL[:MB]` times the rewind buffer and checks
+  every snapshot it holds (docs/SAVE_STATES.md).
 
 ## Tests
 

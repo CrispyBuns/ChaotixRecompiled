@@ -38,7 +38,9 @@
 #include "runtime/character_mods.h"
 #include "runtime/log.h"
 #include "runtime/patches.h"
+#include "runtime/rewind.h"
 #include "runtime/save.h"
+#include "runtime/save_state.h"
 #include "runtime/system.h"
 
 #include <algorithm>
@@ -49,6 +51,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -188,9 +191,40 @@ struct App {
     // Touch devices have neither Esc nor a stick to click, so the progress
     // counter doubles as the way in. Empty when it is not being drawn.
     SDL_FRect achievement_tap{0, 0, 0, 0};
-    struct Toast { std::string title, description; Uint64 until_ms = 0; };
+    // Notifications: unlocks, time attack results, save states. `caption` is
+    // the small line above the title.
+    struct Toast {
+        std::string title, description;
+        Uint64 until_ms = 0;
+        std::string caption = "ACHIEVEMENT UNLOCKED";
+    };
     std::vector<Toast> toasts;
+    // Rewind (issue #40): a snapshot every kRewindInterval frames of play,
+    // with the replacement music's place at each (the game does not ask for
+    // music again, so a step back has to put it back too).
+    RewindBuffer rewind;
+    std::map<uint64_t, std::vector<uint8_t>> rewind_music;
+    bool rewinding = false;  // held this pass, and allowed
+    // Save state pad buttons are polled, so a trigger works as well as a
+    // button; these remember last pass, to act on the press only.
+    bool save_button_was = false, load_button_was = false;
+    // --rewind-hold FRAME:PASSES, for testing: rewind held for that many
+    // passes round the main loop from that frame on, as the key would be.
+    struct RewindHold { uint64_t frame = 0; int passes = 0; bool armed = false; } rewind_script;
 };
+
+// Rewind: a snapshot every other frame, so holding rewind goes back at twice
+// the game's speed (each step back shows one frame run from the snapshot).
+// At most a minute of play, and at most 64 MB (32 MB on a phone): a level
+// costs about 12 KB a snapshot, the special stage about 40 KB (measured with
+// chaotix_headless --rewind).
+constexpr int kRewindInterval = 2;
+constexpr size_t kRewindMaxSnapshots = 60 * 60 / kRewindInterval;
+#if defined(SDL_PLATFORM_ANDROID) || defined(SDL_PLATFORM_IOS)
+constexpr size_t kRewindBudget = size_t(32) << 20;
+#else
+constexpr size_t kRewindBudget = size_t(64) << 20;
+#endif
 
 // Looks for a data file shipped with the build: next to the executable, in an
 // "assets" folder beside it, or in the source tree during development.
@@ -283,7 +317,8 @@ std::vector<std::string> rom_search_dirs(const App& app) {
 // not confused with one of them.
 bool option_takes_value(const std::string& a) {
     static const char* with_value[] = {"--aspect", "--autotest", "--autotest-shot", "--window-size",
-                                       "--press", "--user-dir", "--install", "--menu", "--keys", "--shots", "--hold", "--record-input", "--mods-dir", "--stage"};
+                                       "--press", "--user-dir", "--install", "--menu", "--keys", "--shots", "--hold", "--record-input", "--mods-dir", "--stage",
+                                       "--rewind-hold"};
     for (const char* o : with_value)
         if (a == o) return true;
     return false;
@@ -399,7 +434,7 @@ void draw_toasts(App& app) {
     if (!g.ready()) return;
 
     app.achievement_tap = {0, 0, 0, 0};
-    if (app.touch_enabled && !app.menu.open()) {
+    if (app.achievements_on && app.touch_enabled && !app.menu.open()) {
         char label[32];
         std::snprintf(label, sizeof label, "%d/%zu", app.achievements.unlocked_count(),
                       app.achievements.list().size());
@@ -425,7 +460,7 @@ void draw_toasts(App& app) {
         const SDL_FRect box{g.px(14), ty, toast_w, toast_h};
         g.panel(box, ui::theme::surface_raised, ui::theme::accent, g.px(10), g.px(1.5f));
         g.text_fit(ui::Font::Small, box.x + g.px(14), ty + g.px(7), toast_w - g.px(28),
-                   "ACHIEVEMENT UNLOCKED", ui::theme::accent);
+                   t.caption, ui::theme::accent);
         g.text_fit(ui::Font::Body, box.x + g.px(14), ty + g.px(6) + g.line_height(ui::Font::Small),
                    toast_w - g.px(28), t.title, ui::theme::text);
         ty += toast_h + g.px(8);
@@ -457,9 +492,19 @@ bool return_to_title(App& app) {
     // game saved again on top of it.
     std::vector<uint8_t> save(app.m->sram, app.m->sram + sizeof app.m->sram);
     const bool save_dirty = app.m->sram_dirty;
+    // The recompiled code caches whether SDRAM code matches the ROM by these
+    // counters; the snapshot's are older than ones it has already cached
+    // results at, for other memory, so they go on from here instead.
+    const uint32_t sdram_epoch = app.m->sdram_code_epoch;
+    const uint32_t cache_epoch[2] = {app.m->cache_code_epoch[0], app.m->cache_code_epoch[1]};
     *app.m = *app.title_snapshot;
     std::copy(save.begin(), save.end(), app.m->sram);
     app.m->sram_dirty = save_dirty;
+    app.m->sdram_code_epoch = std::max(sdram_epoch, app.m->sdram_code_epoch) + 1;
+    for (int c = 0; c < 2; ++c) app.m->cache_code_epoch[c] = std::max(cache_epoch[c], app.m->cache_code_epoch[c]) + 1;
+    // Rewinding from the title back into the game left behind is not a thing.
+    app.rewind.clear();
+    app.rewind_music.clear();
     // The Start handed over at START GAME may still be in flight; leaving it
     // running would walk the game straight back out of the title.
     app.inject_start = 0;
@@ -495,20 +540,158 @@ SDL_GamepadButton menu_pad_button(const App& app) {
 // Whether anything bound to fast-forward is down (issue #45): its key, its
 // button on any connected pad (a trigger counts past half way), or the
 // on-screen button. Fast-forward is not a player's, so every pad answers.
-bool fast_forward_held(const App& app, uint16_t touch_held) {
-    if (touch_held & TOUCH_FAST_FORWARD) return true;
-    const SDL_Scancode sc = SDL_GetScancodeFromName(app.cfg.ff_key.c_str());
-    if (sc != SDL_SCANCODE_UNKNOWN && SDL_GetKeyboardState(nullptr)[sc]) return true;
-    const SDL_GamepadButton b = SDL_GetGamepadButtonFromString(app.cfg.ff_button.c_str());
-    const SDL_GamepadAxis axis = b == SDL_GAMEPAD_BUTTON_INVALID
-                                     ? SDL_GetGamepadAxisFromString(app.cfg.ff_button.c_str())
-                                     : SDL_GAMEPAD_AXIS_INVALID;
+// Whether a host function's gamepad binding (a button name, a trigger, or
+// "none") is down on any pad.
+bool pad_binding_held(const App& app, const std::string& name) {
+    const SDL_GamepadButton b = SDL_GetGamepadButtonFromString(name.c_str());
+    const SDL_GamepadAxis axis = b == SDL_GAMEPAD_BUTTON_INVALID ? SDL_GetGamepadAxisFromString(name.c_str())
+                                                                 : SDL_GAMEPAD_AXIS_INVALID;
     const bool trigger = axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
     for (SDL_Gamepad* g : app.pads) {
         if (b != SDL_GAMEPAD_BUTTON_INVALID && SDL_GetGamepadButton(g, b)) return true;
         if (trigger && SDL_GetGamepadAxis(g, axis) > 16384) return true;
     }
     return false;
+}
+
+bool key_binding_held(const std::string& name) {
+    const SDL_Scancode sc = SDL_GetScancodeFromName(name.c_str());
+    return sc != SDL_SCANCODE_UNKNOWN && SDL_GetKeyboardState(nullptr)[sc];
+}
+
+// Whether a key event is the bound key. By its scancode, or by its key code
+// for an event that carries none (--keys pushes those).
+bool key_binding_is(const std::string& name, const SDL_KeyboardEvent& k) {
+    const SDL_Scancode bound = SDL_GetScancodeFromName(name.c_str());
+    if (bound == SDL_SCANCODE_UNKNOWN) return false;
+    if (k.scancode != SDL_SCANCODE_UNKNOWN) return k.scancode == bound;
+    return k.key == SDL_GetKeyFromScancode(bound, SDL_KMOD_NONE, false);
+}
+
+bool fast_forward_held(const App& app, uint16_t touch_held) {
+    if (touch_held & TOUCH_FAST_FORWARD) return true;
+    return key_binding_held(app.cfg.ff_key) || pad_binding_held(app, app.cfg.ff_button);
+}
+
+// Rewind (issue #40): its key, its pad button or the on-screen button.
+bool rewind_held(const App& app, uint16_t touch_held) {
+    if (touch_held & TOUCH_REWIND) return true;
+    return key_binding_held(app.cfg.rewind_key) || pad_binding_held(app, app.cfg.rewind_button);
+}
+
+// ---------------------------------------------------------------------------
+// Save states (issue #40). Files in <user data>/States, one per slot and ROM.
+// ---------------------------------------------------------------------------
+std::string state_path(const App& app, int slot) {
+    return app.store.root() + "States/chaotix_" + app.m->rom.sha1.substr(0, 8) + "_" + std::to_string(slot) + ".state";
+}
+
+// Why states and rewind cannot be used now, or empty when they can. Never in
+// a TIME ATTACK run: a record is set in one go, at the game's own speed.
+std::string states_locked(const App& app) {
+    if (app.ta.running) return "NOT IN TIME ATTACK";
+    if (!app.handed_over) return "START THE GAME FIRST";
+    if (app.stage_kick >= 0) return "THE STAGE IS STARTING";
+    return "";
+}
+
+void notice(App& app, const std::string& caption, const std::string& title, const std::string& note = "") {
+    // One at a time: a row of SAVED from pressing it repeatedly is noise.
+    app.toasts.erase(std::remove_if(app.toasts.begin(), app.toasts.end(),
+                                    [&](const App::Toast& t) { return t.caption == caption; }),
+                     app.toasts.end());
+    app.toasts.push_back({title, note, SDL_GetTicks() + 2500, caption});
+}
+
+void save_state(App& app, int slot) {
+    const std::string why = states_locked(app);
+    if (!why.empty()) { notice(app, "SAVE STATE", why); return; }
+    const std::vector<uint8_t> bytes = savestate::save(*app.m, app.music.save_position(), int64_t(std::time(nullptr)));
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::u8path(app.store.root() + "States"), ec);
+    const std::string path = state_path(app, slot);
+    if (!savestate::write_file(path, bytes)) {
+        LOGW("state", "cannot write %s", path.c_str());
+        notice(app, "SAVE STATE", "STATE " + std::to_string(slot) + " NOT SAVED", "The file could not be written.");
+        return;
+    }
+    LOGI("state", "slot %d saved at frame %llu to %s (%zu bytes)", slot, (unsigned long long)app.m->frame_count,
+         path.c_str(), bytes.size());
+    notice(app, "SAVE STATE", "STATE " + std::to_string(slot) + " SAVED");
+}
+
+// After the machine jumped in time (a state loaded): what the host keeps
+// about the moment before no longer applies.
+void after_time_jump(App& app) {
+    app.inject_start = 0;
+    app.m->audio_out.clear();
+    if (app.audio) SDL_ClearAudioStream(app.audio);
+    app.achievements.forget_previous();
+}
+
+void load_state(App& app, int slot) {
+    const std::string why = states_locked(app);
+    if (!why.empty()) { notice(app, "LOAD STATE", why); return; }
+    std::vector<uint8_t> bytes;
+    const std::string name = "STATE " + std::to_string(slot);
+    if (!savestate::read_file(state_path(app, slot), bytes)) { notice(app, "LOAD STATE", name + " IS EMPTY"); return; }
+    std::string err;
+    std::vector<uint8_t> host;
+    if (!savestate::load(*app.m, bytes, &err, &host)) {
+        LOGW("state", "slot %d: %s", slot, err.c_str());
+        // The menu's font has capitals only.
+        for (char& ch : err) ch = char(std::toupper(static_cast<unsigned char>(ch)));
+        notice(app, "LOAD STATE", name + " NOT LOADED", err);
+        return;
+    }
+    app.music.load_position(host);
+    app.rewind.clear();
+    app.rewind_music.clear();
+    after_time_jump(app);
+    LOGI("state", "slot %d loaded (frame %llu)", slot, (unsigned long long)app.m->frame_count);
+    notice(app, "LOAD STATE", name + " LOADED");
+}
+
+// What a slot holds, for the menu.
+std::string state_info(const App& app, int slot) {
+    std::vector<uint8_t> bytes;
+    if (!savestate::read_file(state_path(app, slot), bytes)) return "EMPTY";
+    savestate::Info info;
+    std::string err;
+    if (!savestate::read_info(bytes, info, &err)) return "UNREADABLE";
+    if (info.game_version != savestate::game_version()) return "FROM VERSION " + info.game_version;
+    if (!info.saved_unix) return "SAVED";
+    const std::time_t t = std::time_t(info.saved_unix);
+    char buf[32];
+    if (const std::tm* tm = std::localtime(&t)) std::strftime(buf, sizeof buf, "SAVED %Y-%m-%d %H:%M", tm);
+    else std::snprintf(buf, sizeof buf, "SAVED");
+    return buf;
+}
+
+// One step back through the rewind buffer, and a frame run from there for a
+// picture, with the pad let go and the sound dropped. The game then carries
+// on from that frame when rewind is let go.
+void rewind_step(App& app) {
+    // Nothing to go back to (just after a load, say): the game holds still
+    // rather than running on with the pad let go.
+    if (!app.rewind.snapshots()) return;
+    app.rewind.step_back(*app.m);
+    auto it = app.rewind_music.find(app.m->frame_count);
+    if (it != app.rewind_music.end()) app.music.load_position(it->second);
+    app.achievements.forget_previous();
+    app.m->input.pad[0] = app.m->input.pad[1] = 0;
+    app.m->run_frame();
+    app.m->audio_out.clear();
+    app.m->music_events.clear();
+}
+
+void rewind_push(App& app) {
+    app.rewind.set_budget(kRewindBudget);
+    app.rewind.set_max_snapshots(kRewindMaxSnapshots);
+    app.rewind.push(*app.m);
+    app.rewind_music[app.m->frame_count] = app.music.save_position();
+    const uint64_t oldest = app.rewind.oldest_frame();
+    app.rewind_music.erase(app.rewind_music.begin(), app.rewind_music.lower_bound(oldest));
 }
 
 // A stage the front end asked for is taken at the game's mode dispatcher, and
@@ -581,7 +764,7 @@ void follow_time_attack(App& app) {
                              : cheated ? "Cheats were on: not recorded."
                              : best   ? "A new best for this stage."
                                       : "Not a new best.";
-    app.toasts.push_back({title, note, SDL_GetTicks() + 6000});
+    app.toasts.push_back({title, note, SDL_GetTicks() + 6000, "TIME ATTACK"});
     // The run, as it was played. A recorded time that disagrees with what the
     // game showed can then be looked into without anyone having had to set up
     // a recording beforehand.
@@ -599,6 +782,15 @@ void handle_key(App& app, const SDL_KeyboardEvent& k) {
     // An open menu owns the keyboard, so the function keys below cannot be
     // triggered from underneath it.
     if (app.menu.on_key(k.key)) return;
+    // Save states (issue #40), on keys of the player's choosing, so they come
+    // before the fixed function keys below.
+    if (key_binding_is(app.cfg.state_save_key, k)) { save_state(app, app.cfg.state_slot); return; }
+    if (key_binding_is(app.cfg.state_load_key, k)) { load_state(app, app.cfg.state_slot); return; }
+    if (key_binding_is(app.cfg.state_slot_key, k)) {
+        app.cfg.state_slot = app.cfg.state_slot % kStateSlots + 1;
+        notice(app, "SAVE STATE", "SLOT " + std::to_string(app.cfg.state_slot), state_info(app, app.cfg.state_slot));
+        return;
+    }
     switch (k.key) {
     case SDLK_ESCAPE: menu_back(app); break;
     case SDLK_F1: app.cfg.debug_overlay = !app.cfg.debug_overlay; break;
@@ -715,6 +907,7 @@ void load_touch_skin(App& app, const std::string& dir) {
                        "  dpad.bmp a.bmp b.bmp c.bmp x.bmp y.bmp z.bmp start.bmp\n"
                        "  stick.bmp and knob.bmp for the joystick (OPTIONS > INPUT > TOUCH STICK).\n"
                        "  ff.bmp for fast-forward (OPTIONS > INPUT > TOUCH FAST FORWARD).\n"
+                       "  rew.bmp for rewind (OPTIONS > INPUT > TOUCH REWIND).\n"
                        "  button.bmp is used for any face button without its own file.\n"
                        "  <name>_pressed.bmp is drawn while that button is held.\n"
                        "Each image is stretched to the button's square; a missing one is drawn as before.\n",
@@ -723,7 +916,7 @@ void load_touch_skin(App& app, const std::string& dir) {
         }
     }
     int loaded = 0;
-    for (const char* name : {"dpad", "stick", "knob", "a", "b", "c", "x", "y", "z", "start", "ff", "button"}) {
+    for (const char* name : {"dpad", "stick", "knob", "a", "b", "c", "x", "y", "z", "start", "ff", "rew", "button"}) {
         for (int pressed = 0; pressed < 2; ++pressed) {
             const std::string path = dir + "/" + name + (pressed ? "_pressed" : "") + ".bmp";
             SDL_Surface* s = SDL_LoadBMP(path.c_str());
@@ -942,7 +1135,7 @@ void apply_rom_patches(App& app) {
 SDL_Texture* touch_image(const App& app, const TouchButton& b, bool on) {
     std::string name = b.is_dpad ? "dpad" : b.label;
     std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) { return char(std::tolower(ch)); });
-    for (const std::string& n : {name, std::string(b.is_dpad || name == "start" || name == "ff" ? "" : "button")}) {
+    for (const std::string& n : {name, std::string(b.is_dpad || name == "start" || name == "ff" || name == "rew" ? "" : "button")}) {
         auto it = app.touch_skin.find(n);
         if (n.empty() || it == app.touch_skin.end()) continue;
         if (on && it->second[1]) return it->second[1];
@@ -1076,6 +1269,11 @@ void draw_touch_controls(App& app, uint16_t held) {
             const float s = b.r * 0.32f;
             fill_arrow(app.renderer, b.cx - s, b.cy, 1, 0, s, colour(1, 1, 1, on, 255));
             fill_arrow(app.renderer, b.cx + s * 0.6f, b.cy, 1, 0, s, colour(1, 1, 1, on, 255));
+        } else if (b.mask == TOUCH_REWIND) {
+            // And rewind's, the same pointing back.
+            const float s = b.r * 0.32f;
+            fill_arrow(app.renderer, b.cx + s, b.cy, -1, 0, s, colour(1, 1, 1, on, 255));
+            fill_arrow(app.renderer, b.cx - s * 0.6f, b.cy, -1, 0, s, colour(1, 1, 1, on, 255));
         } else if (app.ui.ready()) {
             const ui::Font f = ui::Font::Pixel;
             const std::string label = b.label;
@@ -1214,6 +1412,10 @@ int main(int argc, char** argv) {
                 app.cli_stage.combi = uint16_t(cc);
                 app.cli_stage.two_players = two != 0;
             }
+        } else if (a == "--rewind-hold" && i + 1 < argc) {
+            unsigned long long f = 0;
+            int passes = 0;
+            if (std::sscanf(argv[++i], "%llu:%d", &f, &passes) == 2) app.rewind_script = {uint64_t(f), passes, false};
         } else if (a == "--log-timing") {
             app.log_timing = true;
         } else if ((a == "--press" || a == "--hold") && i + 1 < argc) {
@@ -1284,6 +1486,8 @@ int main(int argc, char** argv) {
             app.m->stage_request = r;
             app.m->stage_pending = true;
             app.handed_over = true;
+            app.rewind.clear();
+            app.rewind_music.clear();
             // Tapping Start until the request is taken, rather than one press:
             // a single one only gets the title past its own animation, and the
             // stage would then wait out the whole title screen (about eight
@@ -1339,6 +1543,10 @@ int main(int argc, char** argv) {
             for (const auto& msg : messages) LOGI("sprites", "%s", msg.c_str());
             LOGI("sprites", "%d sprite sheet(s) exported to %s", n, dir.c_str());
         };
+        hooks.save_state = [&app](int slot) { save_state(app, slot); };
+        hooks.load_state = [&app](int slot) { load_state(app, slot); };
+        hooks.state_info = [&app](int slot) { return app.m ? state_info(app, slot) : std::string(); };
+        hooks.states_locked = [&app] { return app.m ? states_locked(app) : std::string(); };
         app.start_stage = hooks.start_stage;
         app.menu.set_hooks(std::move(hooks));
     }
@@ -1556,7 +1764,39 @@ int main(int argc, char** argv) {
         // record is set at the game's own speed, nor under the menu.
         app.fast_forward = app.ff_state.update(fast_forward_held(app, touch_held), app.cfg.ff_mode,
                                                app.ta.running || app.menu.open());
-        touch_held &= uint16_t(~TOUCH_FAST_FORWARD);  // not the game's
+        // Rewind (issue #40): never in a time attack run, nor under the menu.
+        // Turned off, its memory goes back.
+        if (!app.cfg.rewind && app.rewind.snapshots()) {
+            app.rewind.clear(true);
+            app.rewind_music.clear();
+        }
+        const bool rewind_allowed = app.cfg.rewind && !app.menu.open() && states_locked(app).empty();
+        const bool was_rewinding = app.rewinding;
+        bool scripted_rewind = false;
+        if (app.rewind_script.passes > 0) {
+            if (!app.rewind_script.armed && app.m->frame_count >= app.rewind_script.frame) app.rewind_script.armed = true;
+            if (app.rewind_script.armed) { scripted_rewind = true; --app.rewind_script.passes; }
+        }
+        app.rewinding = rewind_allowed && (rewind_held(app, touch_held) || scripted_rewind);
+        if (app.rewinding) app.fast_forward = false;
+        if (was_rewinding && !app.rewinding) {
+            LOGI("rewind", "playing on from frame %llu (%zu snapshots, %.1f MB left)",
+                 (unsigned long long)app.m->frame_count, app.rewind.snapshots(),
+                 double(app.rewind.memory()) / 1048576.0);
+            if (app.audio) SDL_ClearAudioStream(app.audio);
+        }
+        // Save and load on a pad: on the press, polled so triggers count too.
+        {
+            const bool save_down = pad_binding_held(app, app.cfg.state_save_button);
+            const bool load_down = pad_binding_held(app, app.cfg.state_load_button);
+            if (!app.menu.open()) {
+                if (save_down && !app.save_button_was) save_state(app, app.cfg.state_slot);
+                if (load_down && !app.load_button_was) load_state(app, app.cfg.state_slot);
+            }
+            app.save_button_was = save_down;
+            app.load_button_was = load_down;
+        }
+        touch_held &= uint16_t(~(TOUCH_FAST_FORWARD | TOUCH_REWIND));  // not the game's
         uint16_t raw = 0, raw2 = 0;
         // Emulated frames advance in batches, so a window of frame numbers can
         // be stepped straight over: arm on reaching the frame, then hold for a
@@ -1608,6 +1848,13 @@ int main(int argc, char** argv) {
         const int autotest_batch = app.host_script.empty() ? 64 : 1;
         while (steps < (autotest ? autotest_batch : plan.frames)) {
             if (autotest && app.m->frame_count >= app.autotest_frames) break;
+            if (app.rewinding) {
+                // One step back per frame period, at the normal pacing.
+                rewind_step(app);
+                if (autotest && !app.fast_forward) accumulator -= frame_ticks;
+                ++steps;
+                continue;
+            }
             // Scripted keys are pushed as events and handled on the next pass
             // round the event loop, exactly like a key someone pressed.
             for (auto& k : app.key_script) {
@@ -1640,6 +1887,8 @@ int main(int argc, char** argv) {
             app.music.set_volume(app.cfg.mod_music_volume * app.cfg.music_volume / 100);
             app.music.after_frame(*app.m, first_sample);
             follow_time_attack(app);
+            if (app.cfg.rewind && states_locked(app).empty() && app.m->frame_count % kRewindInterval == 0)
+                rewind_push(app);
             if (app.achievements_on && !app.cheating) {
                 app.achievements.update(*app.m, [&](const achievements::Achievement& a) {
                     app.toasts.push_back({a.title, a.description, SDL_GetTicks() + 5000});
@@ -1743,12 +1992,24 @@ int main(int argc, char** argv) {
         if (app.touch_enabled) {
             // The fast-forward button is not there during a time attack run,
             // and is lit while fast-forward is on (TOGGLE leaves it on).
-            app.touch.layout(ow, oh, app.cfg.touch_stick, app.cfg.touch_sonic_cd, app.cfg.touch_ff && !app.ta.running);
-            draw_touch_controls(app, uint16_t(touch_held | (app.fast_forward ? TOUCH_FAST_FORWARD : 0)));
+            app.touch.layout(ow, oh, app.cfg.touch_stick, app.cfg.touch_sonic_cd, app.cfg.touch_ff && !app.ta.running,
+                             app.cfg.touch_rewind && app.cfg.rewind && !app.ta.running);
+            draw_touch_controls(app, uint16_t(touch_held | (app.fast_forward ? TOUCH_FAST_FORWARD : 0) |
+                                              (app.rewinding ? TOUCH_REWIND : 0)));
         }
         if (app.ui.ready()) {
             app.menu.draw(app.ui, app.achievements);
-            if (app.achievements_on) draw_toasts(app);
+            draw_toasts(app);
+            if (app.rewinding && !app.menu.open()) {
+                // Top centre, where nothing else is.
+                ui::Ui& g = app.ui;
+                const char* label = "<< REWIND";
+                const float w = g.text_width(ui::Font::Pixel, label) + g.px(28);
+                const float h = g.line_height(ui::Font::Pixel) + g.px(14);
+                const SDL_FRect r{(g.width() - w) * 0.5f, g.px(12), w, h};
+                g.panel(r, ui::theme::surface.alpha(200), ui::theme::accent, h * 0.5f);
+                g.text(ui::Font::Pixel, r.x + g.px(14), r.y + g.px(7), label, ui::theme::text);
+            }
             app.ui.end_frame();
         }
         if (app.cfg.debug_overlay) {

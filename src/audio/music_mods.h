@@ -68,6 +68,13 @@ public:
     void after_frame(Machine& m, size_t first_sample);
     uint8_t playing() const { return current_; }
 
+    // Where the player is (save states and rewind, issue #40): the piece, its
+    // place, the piece a jingle interrupted and the fade. The game will not
+    // ask again for music it already asked for, so a state put back has to
+    // bring this with it. As bytes, so the host can keep them with the state.
+    std::vector<uint8_t> save_position() const;
+    void load_position(const std::vector<uint8_t>& bytes);  // ignores anything malformed
+
 private:
     const Track* track(uint8_t id);
     void on_request(uint8_t id);

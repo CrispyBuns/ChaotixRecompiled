@@ -6,6 +6,9 @@
 #include <cstdio>
 #include <fstream>
 #include <sstream>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 
 namespace chaotix {
 
@@ -40,6 +43,14 @@ std::string parse_menu_background(const std::string& v) {
 }
 
 int Config::menu_backdrop_zone() const { return backdrop_find_zone(menu_background); }
+
+bool rewind_default() {
+#if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
+    return false;
+#else
+    return true;
+#endif
+}
 
 void Config::set_defaults() {
     *this = Config{};
@@ -130,6 +141,14 @@ bool Config::load(const std::string& path) {
             else if (k == "FastForwardKey") ff_key = v;
             else if (k == "FastForwardButton") ff_button = v;
             else if (k == "TouchFastForward") touch_ff = parse_bool(v, touch_ff);
+            else if (k == "SaveStateKey") state_save_key = v;
+            else if (k == "LoadStateKey") state_load_key = v;
+            else if (k == "StateSlotKey") state_slot_key = v;
+            else if (k == "RewindKey") rewind_key = v;
+            else if (k == "SaveStateButton") state_save_button = v;
+            else if (k == "LoadStateButton") state_load_button = v;
+            else if (k == "RewindButton") rewind_button = v;
+            else if (k == "TouchRewind") touch_rewind = parse_bool(v, touch_rewind);
             else if (k == "FastForwardMode") ff_mode = (v == "Toggle" || v == "toggle") ? FastForwardMode::Toggle : FastForwardMode::Hold;
             else if (k == "FastForwardSpeed")
                 ff_speed = (v == "2x" || v == "2X" || v == "2") ? FastForwardSpeed::X2
@@ -138,6 +157,9 @@ bool Config::load(const std::string& path) {
             else if (k.rfind("Key2.", 0) == 0) keys2[k.substr(5)] = v;
             else if (k.rfind("Pad2.", 0) == 0) pads2[k.substr(5)] = v;
             else if (k.rfind("Pad.", 0) == 0) pads[k.substr(4)] = v;
+        } else if (section == "Extras") {
+            if (k == "Rewind") rewind = parse_bool(v, rewind);
+            else if (k == "StateSlot") state_slot = std::clamp(std::atoi(v.c_str()), 1, kStateSlots);
         } else if (section == "TimeAttack") {
             if (k == "Place") ta_place = std::atoi(v.c_str());
             else if (k == "Level") ta_level = std::atoi(v.c_str());
@@ -215,10 +237,22 @@ bool Config::save(const std::string& path) const {
                  ff_button.c_str(), touch_ff ? "true" : "false");
     std::fprintf(f, "FastForwardMode = %s\nFastForwardSpeed = %s\n", fast_forward_mode_name(ff_mode),
                  fast_forward_speed_name(ff_speed));
+    std::fprintf(f, "# Save states and rewind: keys for quick save, quick load, the next slot and rewind\n");
+    std::fprintf(f, "# (held), gamepad buttons (as FastForwardButton), an on-screen rewind button. None of\n");
+    std::fprintf(f, "# them work during a time attack run or with the menu open.\n");
+    std::fprintf(f, "SaveStateKey = %s\nLoadStateKey = %s\nStateSlotKey = %s\nRewindKey = %s\n", state_save_key.c_str(),
+                 state_load_key.c_str(), state_slot_key.c_str(), rewind_key.c_str());
+    std::fprintf(f, "SaveStateButton = %s\nLoadStateButton = %s\nRewindButton = %s\nTouchRewind = %s\n",
+                 state_save_button.c_str(), state_load_button.c_str(), rewind_button.c_str(),
+                 touch_rewind ? "true" : "false");
     for (const auto& [b, k] : keys) std::fprintf(f, "Key.%s = %s\n", b.c_str(), k.c_str());
     for (const auto& [b, k] : keys2) std::fprintf(f, "Key2.%s = %s\n", b.c_str(), k.c_str());
     for (const auto& [b, k] : pads) std::fprintf(f, "Pad.%s = %s\n", b.c_str(), k.c_str());
     for (const auto& [b, k] : pads2) std::fprintf(f, "Pad2.%s = %s\n", b.c_str(), k.c_str());
+    std::fprintf(f, "\n[Extras]\n# Rewind: keep the last minute of play to step back through (the rewind key)\n");
+    std::fprintf(f, "Rewind = %s\n# The save state slot quick save and quick load use, 1-%d (States/ in this folder)\n",
+                 rewind ? "true" : "false", kStateSlots);
+    std::fprintf(f, "StateSlot = %d\n", state_slot);
     std::fprintf(f, "\n[TimeAttack]\n# The last run set up in the front end. Values are the game's own.\n");
     std::fprintf(f, "Place = %d\nLevel = %d\nTime = %d\nPlayer = %d\nCombi = %d\nTwoPlayers = %s\n",
                  ta_place, ta_level, ta_time, ta_player, ta_combi, ta_two_players ? "true" : "false");

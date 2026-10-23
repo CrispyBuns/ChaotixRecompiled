@@ -12,6 +12,13 @@ namespace chaotix {
 enum class WindowMode { Windowed, Borderless, Fullscreen };
 enum class TouchMode { Auto, On, Off };
 
+// Rewind's default (issue #40): on where memory and power are plentiful, off
+// on phones and tablets, where it costs battery and up to 32 MB every frame
+// of play whether or not it is ever used, and needs a button the touch
+// layout does not show unless asked.
+bool rewind_default();
+constexpr int kStateSlots = 4;
+
 struct Config {
     // [Game]
     std::string rom_path;
@@ -79,6 +86,20 @@ struct Config {
     bool touch_ff = false;
     FastForwardMode ff_mode = FastForwardMode::Hold;
     FastForwardSpeed ff_speed = FastForwardSpeed::Max;
+    // Save states and rewind (issue #40): keys (SDL key names) for quick
+    // save, quick load, the next slot and rewind (held); gamepad buttons (as
+    // ff_button). Saving and loading start with no pad button, so nobody
+    // overwrites a state by brushing a button; rewind takes the left trigger,
+    // fast-forward's opposite. The on-screen rewind button is off, like
+    // fast-forward's.
+    std::string state_save_key = "F8";
+    std::string state_load_key = "F9";
+    std::string state_slot_key = "F10";
+    std::string rewind_key = "Backspace";
+    std::string state_save_button = "none";
+    std::string state_load_button = "none";
+    std::string rewind_button = "lefttrigger";
+    bool touch_rewind = false;
     // Mega Drive button name -> what produces it, one set per player so two
     // people can share a keyboard or two controllers behave differently.
     // keys*: SDL key names. pads*: SDL gamepad button names.
@@ -101,6 +122,10 @@ struct Config {
     // Action Replay codes of the player's own ("FFE009:63 + FFADFC:01").
     std::set<std::string> cheats;
     std::string cheat_codes;
+    // [Extras] Rewind on or off, and the slot quick save and quick load use
+    // (1..kStateSlots).
+    bool rewind = rewind_default();
+    int state_slot = 1;
     // [Debug]
     bool debug_overlay = false;
     bool use_recompiled = true;

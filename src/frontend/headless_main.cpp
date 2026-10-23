@@ -4,6 +4,8 @@
 //   chaotix_headless --rom <file> --frames N [--shot F1,F2,...] [--out dir]
 //                    [--press FRAME:BUTTON[+BUTTON]:DURATION ...] [--state-every N]
 //                    [--interp]   (force interpreter even if generated code exists)
+//                    [--save-state FRAME:FILE] [--load-state FILE] [--state-hash-every N]
+//                    [--rewind INTERVAL[:BUDGET_MB]]   (issue #40, runtime/save_state.h)
 #include "audio/music_mods.h"
 #include "cpu/m68k/m68k_interp.h"
 #include "cpu/m68k/m68k_ops.h"
@@ -19,6 +21,8 @@
 #include "renderer/sprite_sheet.h"
 #include "renderer/tile_pack.h"
 #include "runtime/patches.h"
+#include "runtime/rewind.h"
+#include "runtime/save_state.h"
 #include "runtime/sprite_record.h"
 #include "runtime/sprite_replace.h"
 #include "runtime/tile_replace.h"
@@ -409,6 +413,19 @@ int main(int argc, char** argv) {
     // --sprites-oracle N[:SEED]: N random blitter calls, game code vs rebuild.
     int oracle_calls = 0;
     uint32_t oracle_seed = 1;
+    // Save states (issue #40): --save-state FRAME:FILE writes one after that
+    // frame; --load-state FILE loads one before running (into the lockstep
+    // reference too), and the run then carries on from its frame up to
+    // --frames, so frame numbers in the other options keep their meaning.
+    // --state-hash-every N prints a fingerprint of the whole machine.
+    std::map<uint64_t, std::vector<std::string>> save_states;
+    std::string load_state_path;
+    uint64_t state_hash_every = 0;
+    // --rewind INTERVAL[:BUDGET_MB]: a snapshot every INTERVAL frames into a
+    // rewind buffer (runtime/rewind.h), timed; at the end every snapshot is
+    // stepped back to and checked against the state it was taken from.
+    int rewind_interval = 0;
+    size_t rewind_budget_mb = 64;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
@@ -465,6 +482,19 @@ int main(int argc, char** argv) {
             std::fclose(hf);
         }
         else if (a == "--interp") force_interp = true;
+        else if (a == "--save-state") {
+            const std::string spec = next();
+            const size_t colon = spec.find(':');
+            if (colon == std::string::npos) { std::fprintf(stderr, "bad --save-state (FRAME:FILE)\n"); return 2; }
+            save_states[std::strtoull(spec.c_str(), nullptr, 10)].push_back(spec.substr(colon + 1));
+        }
+        else if (a == "--load-state") load_state_path = next();
+        else if (a == "--state-hash-every") state_hash_every = std::strtoull(next().c_str(), nullptr, 10);
+        else if (a == "--rewind") {
+            const auto parts = split(next(), ':');
+            rewind_interval = std::max(1, std::atoi(parts[0].c_str()));
+            if (parts.size() > 1) rewind_budget_mb = size_t(std::max(1, std::atoi(parts[1].c_str())));
+        }
         else if (a == "--lockstep") lockstep = true;
         else if (a == "--profile") profile = true;
         else if (a == "--wide") wide = std::atoi(next().c_str());
@@ -818,6 +848,31 @@ int main(int argc, char** argv) {
         nat->reset();
         centre_compare = true;
     }
+    uint64_t start_frame = 0;
+    if (!load_state_path.empty()) {
+        std::vector<uint8_t> file;
+        std::string why;
+        savestate::Info info;
+        if (!savestate::read_file(load_state_path, file)) {
+            std::fprintf(stderr, "cannot open %s\n", load_state_path.c_str());
+            return 2;
+        }
+        if (!savestate::load(*m, file, &why, nullptr, &info) || (ref && !savestate::load(*ref, file, &why))) {
+            std::fprintf(stderr, "cannot load %s: %s\n", load_state_path.c_str(), why.c_str());
+            return 2;
+        }
+        start_frame = m->frame_count;
+        // A 4:3 comparison machine would have to start from the same moment.
+        nat.reset();
+        centre_compare = false;
+        std::printf("state: loaded %s (frame %llu, %zu bytes, %zu raw)\n", load_state_path.c_str(),
+                    (unsigned long long)info.frame, file.size(), info.raw_size);
+    }
+    RewindBuffer rewind;
+    rewind.set_budget(rewind_budget_mb << 20);
+    std::map<uint64_t, uint64_t> rewind_hashes;  // snapshot frame -> state fingerprint
+    double rewind_push_ms = 0, rewind_push_worst = 0;
+    uint64_t rewind_pushes = 0;
     uint64_t centre_ok_frames = 0;
     int centre_worst = 0;  // most pixels a compared frame differed by (special stage only)
     uint64_t lockstep_ok_frames = 0;
@@ -877,7 +932,7 @@ int main(int argc, char** argv) {
     double worst_ms = 0;
     uint64_t worst_frame = 0, slow_frames = 0, sram_frames = 0, sram_last = 0;
     auto t0 = std::chrono::steady_clock::now();
-    for (uint64_t f = 0; f < frames; ++f) {
+    for (uint64_t f = start_frame; f < frames; ++f) {
         uint16_t btn = 0;
         for (const auto& p : presses)
             if (f >= p.frame && f < p.frame + p.duration) btn |= p.buttons;
@@ -1140,6 +1195,30 @@ int main(int argc, char** argv) {
             std::printf("hash %llu %016llx\n", (unsigned long long)m->frame_count,
                         (unsigned long long)image_hash(m->framebuffer, m->fb_width, m->fb_height, kScreenWidth));
         if (state_every && m->frame_count % state_every == 0) dump_state(*m);
+        if (state_hash_every && m->frame_count % state_hash_every == 0)
+            std::printf("statehash %llu %016llx\n", (unsigned long long)m->frame_count,
+                        (unsigned long long)savestate::state_hash(*m));
+        if (auto it = save_states.find(m->frame_count); it != save_states.end()) {
+            const std::vector<uint8_t> file = savestate::save(*m);
+            for (const std::string& path : it->second) {
+                if (!savestate::write_file(path, file)) { std::fprintf(stderr, "cannot write %s\n", path.c_str()); return 2; }
+                std::printf("state: saved %s at frame %llu (%zu bytes, %zu raw)\n", path.c_str(),
+                            (unsigned long long)m->frame_count, file.size(), savestate::raw_size(savestate::kPicture));
+            }
+        }
+        if (rewind_interval && m->frame_count % uint64_t(rewind_interval) == 0) {
+            const auto r0 = std::chrono::steady_clock::now();
+            rewind.push(*m);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - r0).count();
+            rewind_push_ms += ms;
+            rewind_push_worst = std::max(rewind_push_worst, ms);
+            ++rewind_pushes;
+            std::vector<uint8_t> raw;
+            savestate::serialize(*m, raw, 0);
+            uint64_t h = 1469598103934665603ull;
+            for (uint8_t b : raw) h = (h ^ b) * 1099511628211ull;
+            rewind_hashes[m->frame_count] = h;
+        }
         for (const Peek& p : peeks)
             if (m->frame_count % p.every == 0) {
                 std::printf("peek %llu %04X ", (unsigned long long)m->frame_count, unsigned(p.addr));
@@ -1222,6 +1301,35 @@ int main(int argc, char** argv) {
                     w16(0xE03A), m->wram[0xE05C], w16(0xE052));
     }
     dump_state(*m);
+    if (rewind_interval && rewind_pushes) {
+        // Every snapshot still held, newest first, must be the state it was
+        // taken from.
+        const size_t held = rewind.snapshots();
+        const uint64_t oldest = rewind.oldest_frame(), newest = rewind.newest_frame();
+        std::printf("rewind: %llu snapshots every %d frames, push %.3f ms average, %.3f ms worst (%.3f ms per frame)\n",
+                    (unsigned long long)rewind_pushes, rewind_interval, rewind_push_ms / double(rewind_pushes),
+                    rewind_push_worst, rewind_push_ms / double(frames - start_frame));
+        std::printf("rewind: %zu held in %.1f MB of %zu MB, frames %llu..%llu (%.1f s)\n", held,
+                    double(rewind.memory()) / 1048576.0, rewind_budget_mb, (unsigned long long)oldest,
+                    (unsigned long long)newest, double(newest - oldest) / 60.0);
+        size_t verified = 0, wrong = 0;
+        double step_worst = 0;
+        std::vector<uint8_t> raw;
+        for (;;) {
+            const auto r0 = std::chrono::steady_clock::now();
+            const bool more = rewind.step_back(*m);
+            step_worst = std::max(step_worst, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - r0).count());
+            savestate::serialize(*m, raw, 0);
+            uint64_t h = 1469598103934665603ull;
+            for (uint8_t b : raw) h = (h ^ b) * 1099511628211ull;
+            auto it = rewind_hashes.find(m->frame_count);
+            if (it == rewind_hashes.end() || it->second != h) ++wrong; else ++verified;
+            if (!more) break;
+        }
+        std::printf("rewind: stepped back through %zu snapshots, %zu restored exactly, %zu wrong, step %.3f ms worst\n",
+                    verified + wrong, verified, wrong, step_worst);
+        if (wrong || verified != held) return 7;
+    }
     if (sprites_check && sprite_total.mismatches()) return 6;
     return hash_failures ? 4 : 0;
 }

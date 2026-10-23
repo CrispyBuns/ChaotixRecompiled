@@ -9,6 +9,8 @@ namespace chaotix {
 // Not a Mega Drive button: the on-screen fast-forward button (issue #45). The
 // platform layer takes it out before the pad reaches the game.
 constexpr uint16_t TOUCH_FAST_FORWARD = 1 << 15;
+// Likewise the on-screen rewind button (issue #40), held to step back.
+constexpr uint16_t TOUCH_REWIND = 1 << 14;
 
 struct TouchButton {
     uint16_t mask;       // PAD_* bits produced while held
@@ -26,8 +28,10 @@ public:
     // above it -- the only buttons this game uses -- and the whole lower
     // right of the screen jumping where nothing else is. With fast_forward, a
     // small fast-forward button (TOUCH_FAST_FORWARD) in the top-left corner,
-    // which both layouts leave empty (issue #45).
-    void layout(int w, int h, bool stick = false, bool sonic_cd = false, bool fast_forward = false);
+    // which both layouts leave empty (issue #45). With rewind, a rewind
+    // button (TOUCH_REWIND) there too, left of fast-forward (issue #40).
+    void layout(int w, int h, bool stick = false, bool sonic_cd = false, bool fast_forward = false,
+                bool rewind = false);
     // Buttons pressed by a touch at (x, y) in output pixels.
     uint16_t hit(float x, float y) const;
     // A finger put down (down) or moved, by its id; returns what it presses.

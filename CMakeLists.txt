@@ -62,6 +62,9 @@ add_library(chaotix_runtime STATIC
     src/runtime/character_mods.cpp
     src/renderer/compositor.cpp
     src/runtime/save.cpp
+    src/runtime/save_state.cpp
+    src/runtime/rewind.cpp
+    src/runtime/lz.cpp
     src/audio/ym2612.cpp
     src/audio/sn76489.cpp
     src/audio/music_mods.cpp
@@ -80,6 +83,9 @@ add_library(chaotix_runtime STATIC
 )
 target_include_directories(chaotix_runtime PUBLIC src)
 target_link_libraries(chaotix_runtime PUBLIC chaotix_cpu)
+# Save states record the version that wrote them (runtime/save_state.h).
+set_source_files_properties(src/runtime/save_state.cpp PROPERTIES
+    COMPILE_DEFINITIONS CHAOTIX_VERSION_STRING="${PROJECT_VERSION}")
 chaotix_set_warnings(chaotix_runtime)
 
 # ---------------------------------------------------------------------------

@@ -132,6 +132,9 @@ struct SliceInfo {
     int32_t budget = 0;
 };
 
+// Save states (runtime/save_state.cpp, `transfer`) list the fields below that
+// the emulation depends on: a new one belongs there too, or a loaded state
+// will not carry on as the machine would have.
 class Machine {
 public:
     Machine();

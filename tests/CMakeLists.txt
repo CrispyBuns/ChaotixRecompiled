@@ -26,6 +26,7 @@ add_executable(chaotix_tests
     test_sprite_sheet.cpp
     test_character_mods.cpp
     test_game_font.cpp
+    test_save_state.cpp
 )
 find_package(Threads REQUIRED)  # test_game_font plays beside a backdrop thread
 target_link_libraries(chaotix_tests PRIVATE chaotix_game chaotix_runtime Threads::Threads)
@@ -37,6 +38,7 @@ if(CHAOTIX_BUILD_FRONTEND)
         test_sdl_rom_import.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/sdl_rom_import.cpp
         test_menu.cpp
+        test_state_menu.cpp
         test_time_attack.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/menu.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/ui.cpp
@@ -108,7 +110,29 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_character_mods.py"
                     $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
         set_tests_properties(character_mods PROPERTIES TIMEOUT 1800)
+        # Save states (issue #40): saved mid-level, in the special stage, in a
+        # widescreen level and the widescreen bonus stage, and loaded again,
+        # the game carries on with every picture and the whole machine
+        # identical to the run that never stopped, and lockstep holds from it.
+        add_test(NAME save_states_carry_on_bit_identically
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_save_states.py"
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
+        set_tests_properties(save_states_carry_on_bit_identically PROPERTIES TIMEOUT 900
+            PASS_REGULAR_EXPRESSION "all scenes carry on bit-identically")
     endif()
+    # Rewind (issue #40): every snapshot still held is stepped back to and
+    # must be exactly the state it was taken from; the buffer keeps to its
+    # memory budget (the special stage changes most between frames).
+    add_test(NAME rewind_restores_every_snapshot_in_a_level
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2400 --wide 53
+                --stage 300:4:2:2:2:7:0 --fuzz 36:700:2400 --rewind 2:64)
+    add_test(NAME rewind_keeps_to_its_budget_in_the_special_stage
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2400
+                --stage 300:10:3:0:4:3:0 --fuzz 7:700:2400 --rewind 2:16)
+    set_tests_properties(rewind_restores_every_snapshot_in_a_level PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "rewind: stepped back through 1200 snapshots, 1200 restored exactly, 0 wrong")
+    set_tests_properties(rewind_keeps_to_its_budget_in_the_special_stage PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "held in ((1[0-5]|[0-9])\\.[0-9]|16\\.0) MB of 16 MB.*restored exactly, 0 wrong")
     # Boot -> title -> menus -> DATA LOAD -> level, with gameplay input.
     set(_script
         --press 1750:start:5 --press 1950:start:5 --press 2300:start:5
