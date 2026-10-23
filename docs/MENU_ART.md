@@ -8,7 +8,13 @@ nothing of the game is in the repository or in a release.
 | Setting | Values | Default | `[Video]` key |
 | --- | --- | --- | --- |
 | OPTIONS > EXTRAS > MENU FONT | GAME, PIXEL | GAME | `MenuFont = Game` |
-| OPTIONS > EXTRAS > MENU BACKGROUND | ZONE, PLAIN | ZONE | `MenuBackground = Zone` |
+| OPTIONS > EXTRAS > MENU BACKGROUND | CYCLE, WORLD ENTRANCE, ISOLATED ISLAND, BOTANIC BASE, MARINA MADNESS, SPEED SLIDER, AMAZING ARENA, TECHNO TOWER, PLAIN | CYCLE | `MenuBackground = Cycle` |
+
+The `MenuBackground` values are `Cycle`, `Plain` and the zones' names
+without spaces (`WorldEntrance`, `IsolatedIsland`, `BotanicBase`,
+`MarinaMadness`, `SpeedSlider`, `AmazingArena`, `TechnoTower`), case ignored.
+`Zone`, the value from before the zones could be chosen (issue #37), reads
+as `Cycle`, and so does anything unknown.
 
 PIXEL and PLAIN are the look from before. The new look is the default
 because it is what was asked for, both parts come from the ROM the player
@@ -70,9 +76,13 @@ never involved.
 - **Wide:** rendered with 40 extra columns a side (400x224, about 16:9), as
   WIDESCREEN renders levels. The lobby is 4:3, as the game keeps it.
 - **No characters or HUD:** the backdrop machine's sprite recorder gets a pack
-  that replaces every frame of banks 0-15 (the characters) and 0x13 (the
-  HUD) with an empty image, so they are left out of the picture
+  that replaces every frame of banks 0-15 (the characters), 0x13 (the
+  HUD) and 29 (the seven dots of the tether between the two characters,
+  scaled; found with `--sprites-log`, the same bank in every zone) with an
+  empty image, so they are left out of the picture
   (`runtime/sprite_replace.h`; output only, like every replacement).
+  `BackdropImage::hidden_draws` counts the draws left out of the kept frame,
+  and `--backdrop` prints it.
 - **Interpreted:** the recompiled code keeps one machine's state in globals
   (`game/recomp_dispatch.cpp`), and that machine is the one being played, so
   the backdrop machine runs on the reference interpreters, which keep all
@@ -80,17 +90,38 @@ never involved.
 
 The zones, in the order they are made and shown: Marina Madness 2 at sunset
 (the picture the issue showed), Botanic Base 3 in the morning, Speed Slider 1
-at night, Techno Tower 1 at sunset, Amazing Arena 2 by day, and Isolated
-Island (the lobby) at sunset. Botanic Base 1 is not used: it starts by the
-level's left edge, which shows tiles from beyond it.
+at night, Techno Tower 1 at sunset, Amazing Arena 2 by day, World Entrance at
+sunset, and Isolated Island by day. Botanic Base 1 is not used: it starts by
+the level's left edge, which shows tiles from beyond it.
+
+World Entrance and Isolated Island are the game's own places, reached
+through the stage select like the attractions (`runtime/stage_select.h`):
+
+- **World Entrance** is place 7 (WORLD ENTRANCE), level 0: the lobby's hall,
+  with the EXIT and PLAY signs, 4:3 as the game keeps
+  it. (Before issue #37 this picture was the one called Isolated Island.)
+  Its other levels are no picture: level 1 is the same hall with the
+  attractions open, and from level 2 on they are the bonus-stage and
+  special-stage entrances, black or white with a few sprites.
+- **Isolated Island** is place 6 (INTRODUCTION), level 0: the outdoor level
+  the game opens with, palms and grass, rendered wide (its start is clean
+  in the margins). The game's own times of day apply to it.
 
 **Cost.** About 620 emulated frames each, interpreted: 1.8-2.3 s per picture
-on the development PC (Windows, about 330 frames a second interpreted), 11-13
-s for all six. A phone is maybe 3-10 times slower, so tens of seconds per
+on the development PC (Windows, about 330 frames a second interpreted), 13-16
+s for all seven. A phone is maybe 3-10 times slower, so tens of seconds per
 picture there. It happens once per ROM, on a low-priority thread
 (`platform/backdrops.*`), one picture at a time, and the menu does not wait:
 it is plain until the first picture is ready and picks the others up as they
 arrive. With MENU BACKGROUND on PLAIN nothing is made at all.
+
+With one zone chosen, only that zone's picture is made (`MenuBackdrops::
+choose`), and it goes first: a picture CYCLE had under way is given up
+(cancelled, not marked failed) so the chosen one starts at once, and the
+menu is plain until it is ready. The others are made only if CYCLE is
+chosen again. Pictures already in the cache are loaded whatever the choice,
+so stepping through the zones in the menu shows each one at once that has
+been made before.
 
 The worker never competes with the game: slow machines have no core to spare
 (issue #31's Celeron needed 20-37 ms a frame; phones share caches and thermal
@@ -103,12 +134,16 @@ slow machine the pictures appear over a few visits to the menu. Autotests
 still wait for the first picture before they run.
 
 **Cache.** Each picture is written as a PNG to
-`<user data>/Cache/Backdrops/v1-<first 12 hex digits of the ROM's SHA-1>/<zone>.png`
+`<user data>/Cache/Backdrops/v2-<first 12 hex digits of the ROM's SHA-1>/<zone>.png`
 (the patched image's SHA-1 when ROM patches are applied, since they can change
 the levels' art), and later starts load them at once. Delete the folder to
 make them again. They are derived from your ROM and stay on your device.
+`v2` since the tether is left out too (issue #37); `v1` pictures are not used.
 
-**On screen.** Each time the menu opens it shows the next zone. The picture
+**On screen.** On CYCLE, each time the menu opens it shows the next zone; a
+chosen zone stays, and a new choice shows at once (or plain until its picture
+is made). The tint and accent below come from whichever picture is shown. The
+picture
 covers the area (cropped to its shape, never stretched) and a translucent
 coat of the zone's own colour goes over it (`backdrop_tint`: the picture's
 average colour at a third of its brightness) so that the white and yellow

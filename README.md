@@ -137,7 +137,10 @@ itself, on a second machine in the background while a menu is open -- it is
 paused whenever you are playing -- (a couple of seconds each on a PC, longer
 on a phone), then kept in the user data folder under
 `Cache/Backdrops`. Until a picture exists the menu is plain. OPTIONS > EXTRAS
-> MENU FONT (GAME / PIXEL) and MENU BACKGROUND (ZONE / PLAIN), `MenuFont` and
+> MENU BACKGROUND picks CYCLE (every zone in turn, the default), one zone
+for good (WORLD ENTRANCE, ISOLATED ISLAND, BOTANIC BASE, MARINA MADNESS,
+SPEED SLIDER, AMAZING ARENA or TECHNO TOWER; only that picture is made), or
+PLAIN. MENU FONT (GAME / PIXEL) and MENU BACKGROUND on PLAIN, `MenuFont` and
 `MenuBackground` in `[Video]`, bring back the earlier look. How it works:
 [docs/MENU_ART.md](docs/MENU_ART.md).
 

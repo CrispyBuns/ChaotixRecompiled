@@ -9,6 +9,7 @@
 #include <iterator>
 #include <string>
 
+#include "frontend/backdrop.h"
 #include "frontend/config.h"
 #include "game/achievements.h"
 #include "game/cheats.h"
@@ -127,6 +128,11 @@ std::string Menu::page_name() const {
 std::string Menu::selected_label() const {
     if (selected_ < 0 || selected_ >= int(items_.size())) return "";
     return items_[size_t(selected_)].label;
+}
+
+std::string Menu::selected_value() const {
+    if (selected_ < 0 || selected_ >= int(items_.size()) || !items_[size_t(selected_)].value) return "";
+    return items_[size_t(selected_)].value();
 }
 
 std::string Menu::selected_note() const {
@@ -499,9 +505,25 @@ void Menu::build_extras() {
                       [c] { return std::string(c->menu_game_font ? "GAME" : "PIXEL"); },
                       [c](int s) { if (s) c->menu_game_font = !c->menu_game_font; },
                       "the game's own letters"});
+    // Issue #37: CYCLE shows the zones in turn, a zone's name only that one.
     items_.push_back({"MENU BACKGROUND",
-                      [c] { return std::string(c->menu_backdrop ? "ZONE" : "PLAIN"); },
-                      [c](int s) { if (s) c->menu_backdrop = !c->menu_backdrop; },
+                      [c] {
+                          if (!c->menu_backdrop_on()) return std::string("PLAIN");
+                          const int zone = c->menu_backdrop_zone();
+                          return zone < 0 ? std::string("CYCLE") : std::string(backdrop_specs()[size_t(zone)].name);
+                      },
+                      [c](int s) {
+                          if (!s) return;
+                          std::vector<std::string> values{"Cycle"};
+                          for (int i : backdrop_menu_order()) values.push_back(backdrop_specs()[size_t(i)].zone);
+                          values.push_back("Plain");
+                          int at = 0;
+                          const std::string now = parse_menu_background(c->menu_background);
+                          for (size_t i = 0; i < values.size(); ++i)
+                              if (values[i] == now) at = int(i);
+                          cycle(at, int(values.size()), s);
+                          c->menu_background = values[size_t(at)];
+                      },
                       "the game's zones behind it"});
     items_.push_back({"DUMP GRAPHICS",
                       [c] { return on_off(c->dump_graphics); },
@@ -739,7 +761,7 @@ void Menu::set_backdrop(SDL_Texture* texture, float width, float height, ui::Col
     zone_accent_ = accent;
 }
 
-bool Menu::backdrop_on() const { return backdrop_ && cfg_ && cfg_->menu_backdrop; }
+bool Menu::backdrop_on() const { return backdrop_ && cfg_ && cfg_->menu_backdrop_on(); }
 
 void Menu::fill(ui::Ui& g, const SDL_FRect& r, ui::Color plain, uint8_t tint_alpha) const {
     if (!backdrop_on()) {

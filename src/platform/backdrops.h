@@ -48,8 +48,14 @@ public:
     // frames of its machine have been emulated so far.
     bool busy() const { return worker_.joinable(); }
     uint64_t frames_emulated() const { return control_.frames.load(); }
-    // The next picture, when the menu opens.
+    // The next picture, when the menu opens. Nothing while one zone is chosen.
     void advance();
+    // MENU BACKGROUND (issue #37): -1 cycles through every zone; an index into
+    // backdrop_specs() shows only that zone, and only its picture is made (the
+    // menu is plain until it is ready). Takes effect at once, so the menu
+    // shows the choice while it is being made.
+    void choose(int index);
+    int chosen() const { return chosen_; }
 
     struct Shown {
         SDL_Texture* texture = nullptr;
@@ -74,6 +80,7 @@ private:
     struct Finished {
         size_t index = 0;
         bool ok = false;
+        bool cancelled = false;  // given up for a chosen zone (or at shutdown)
         std::string why;
         double ms = 0;
         BackdropImage image;
@@ -86,8 +93,10 @@ private:
     std::string dir_;
     bool loaded_ = false;
     int current_ = -1;
+    int chosen_ = -1;  // choose()
 
     std::thread worker_;
+    int working_index_ = -1;  // the entry the worker is making (main thread)
     BackdropControl control_;
     std::atomic<bool> working_{false};
     std::mutex mutex_;

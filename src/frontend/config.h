@@ -34,7 +34,13 @@ struct Config {
     // rather than the bundled pixel face, and pictures of the game's zones
     // (rendered from the ROM and cached) behind it rather than plain colour.
     bool menu_game_font = true;
-    bool menu_backdrop = true;
+    // MENU BACKGROUND (issue #37): "Cycle" (the zones in turn, the next one
+    // each time the menu opens), "Plain", or one zone's `zone` key from
+    // frontend/backdrop.h ("WorldEntrance", "MarinaMadness", ...).
+    std::string menu_background = "Cycle";
+    bool menu_backdrop_on() const { return menu_background != "Plain"; }
+    // The chosen zone's index in backdrop_specs(); -1 for Cycle and Plain.
+    int menu_backdrop_zone() const;
     bool achievements = true;  // local achievement tracking (assets/achievements.ini)
     // Write each graphic drawn (Mega Drive tiles, 32X sprites) to
     // Mods/Textures/Dump (issue #35).
@@ -97,6 +103,10 @@ struct Config {
 };
 
 const char* window_mode_name(WindowMode m);
+// A `MenuBackground` value as it is kept: Cycle, Plain or a zone's key, in
+// their own spelling, case ignored on the way in. The value from before
+// issue #37, Zone, is Cycle; so is anything unknown.
+std::string parse_menu_background(const std::string& v);
 
 // Best times. 0 means there is none yet; record_best returns true when the
 // time is an improvement (and stores it).

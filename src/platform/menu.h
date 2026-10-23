@@ -70,6 +70,8 @@ public:
     std::string page_name() const;
     // The highlighted entry's label, empty when the page has no entries.
     std::string selected_label() const;
+    // The value it shows on the right, empty for an action.
+    std::string selected_value() const;
     // What that entry is for, for tests and screenshots.
     std::string selected_note() const;
     void close() { page_ = Page::Closed; }
@@ -85,12 +87,12 @@ public:
     // it says where the image goes. Returns false to fill the window as usual.
     bool art_panel(ui::Ui& g, SDL_FRect* out) const;
     // Damps the full-window backdrop before the panel is drawn over it, or
-    // with MENU BACKGROUND on ZONE puts the zone's picture there instead.
+    // with a zone picture behind the menu puts it there instead.
     void draw_backdrop_dim(ui::Ui& g) const;
     // Issue #8: a picture of one of the game's zones (platform/backdrops.h)
     // for the menu's panels and backgrounds, with the translucent colour laid
     // over it and the colour for frames and markers, both taken from it. The
-    // menu uses it while MENU BACKGROUND is ZONE; without one it keeps its
+    // menu uses it unless MENU BACKGROUND is PLAIN; without one it keeps its
     // plain colours. The texture must outlive its use.
     void set_backdrop(SDL_Texture* texture, float width, float height, ui::Color tint, ui::Color accent);
     void clear_backdrop() { backdrop_ = nullptr; }

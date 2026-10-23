@@ -1,4 +1,5 @@
 #include "config.h"
+#include "frontend/backdrop.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -28,6 +29,17 @@ const char* window_mode_name(WindowMode m) {
     }
     return "Windowed";
 }
+
+std::string parse_menu_background(const std::string& v) {
+    std::string low;
+    for (char ch : v) low += char(std::tolower(static_cast<unsigned char>(ch)));
+    if (low == "plain") return "Plain";
+    const int zone = backdrop_find_zone(v);
+    if (zone >= 0) return backdrop_specs()[size_t(zone)].zone;
+    return "Cycle";  // Cycle, the earlier Zone, or anything unknown
+}
+
+int Config::menu_backdrop_zone() const { return backdrop_find_zone(menu_background); }
 
 void Config::set_defaults() {
     *this = Config{};
@@ -84,7 +96,7 @@ bool Config::load(const std::string& path) {
             else if (k == "WidescreenEverywhere") wide_everywhere = parse_bool(v, wide_everywhere);
             else if (k == "WidescreenHud") wide_hud = parse_bool(v, wide_hud);
             else if (k == "MenuFont") menu_game_font = !(v == "Pixel" || v == "pixel");
-            else if (k == "MenuBackground") menu_backdrop = !(v == "Plain" || v == "plain");
+            else if (k == "MenuBackground") menu_background = parse_menu_background(v);
         } else if (section == "Cheats") {
             if (k == "Enabled") {
                 cheats.clear();
@@ -156,8 +168,10 @@ bool Config::save(const std::string& path) const {
     std::fprintf(f, "WidescreenHud = %s\n", wide_hud ? "true" : "false");
     std::fprintf(f, "# The menu's font: Game (read from your ROM) | Pixel (the bundled pixel face)\n");
     std::fprintf(f, "MenuFont = %s\n", menu_game_font ? "Game" : "Pixel");
-    std::fprintf(f, "# Behind the menu: Zone (pictures of the game's zones, made from your ROM) | Plain\n");
-    std::fprintf(f, "MenuBackground = %s\n", menu_backdrop ? "Zone" : "Plain");
+    std::fprintf(f, "# Behind the menu, pictures of the game's zones made from your ROM: Cycle (each in\n");
+    std::fprintf(f, "# turn) | WorldEntrance | IsolatedIsland | BotanicBase | MarinaMadness | SpeedSlider |\n");
+    std::fprintf(f, "# AmazingArena | TechnoTower (that one only) | Plain (no picture)\n");
+    std::fprintf(f, "MenuBackground = %s\n", parse_menu_background(menu_background).c_str());
     std::fprintf(f, "# Integer | Fit | Stretch\nScaling = %s\n", scale_name(viewport.scale));
     std::fprintf(f, "# Nearest | Linear\nFilter = %s\n", linear_filter ? "Linear" : "Nearest");
     std::fprintf(f, "# Windowed | Borderless | Fullscreen\nWindowMode = %s\n", window_mode_name(window_mode));

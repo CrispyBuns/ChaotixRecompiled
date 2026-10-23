@@ -1363,11 +1363,13 @@ int main(int argc, char** argv) {
         else LOGW("menu", "the game's font: %s; the menu keeps the pixel face", why.c_str());
     }
     app.backdrops.configure(app.m->rom, app.store.root() + "Cache/Backdrops/");
-    if (app.autotest_frames && app.cfg.menu_backdrop && app.ui.ready()) {
+    app.backdrops.choose(app.cfg.menu_backdrop_zone());
+    if (app.autotest_frames && app.cfg.menu_backdrop_on() && app.ui.ready()) {
         // A screenshot of the menu should show what a player sees once the
         // picture exists, not the plain look of the first seconds.
         const Uint64 give_up = SDL_GetTicks() + 60000;
-        while (app.backdrops.ready_count() == 0 && SDL_GetTicks() < give_up) {
+        MenuBackdrops::Shown shown;
+        while (!app.backdrops.current(shown) && SDL_GetTicks() < give_up) {
             app.backdrops.update(app.renderer, true, true);
             SDL_Delay(20);
         }
@@ -1431,7 +1433,8 @@ int main(int argc, char** argv) {
     while (app.running) {
         // The menu is where settings change: keep them the moment it closes.
         if (menu_was_open && !app.menu.open()) save_now(app);
-        // Each time the menu opens it shows the next zone.
+        // Each time the menu opens it shows the next zone (MENU BACKGROUND on
+        // CYCLE; a chosen zone stays).
         if (!menu_was_open && app.menu.open()) app.backdrops.advance();
         menu_was_open = app.menu.open();
         // Wait before polling input so it is fresh when the frame is run.
@@ -1658,7 +1661,8 @@ int main(int argc, char** argv) {
         if (app.ui.ready()) {
             app.ui.begin_frame();
             panelled = app.menu.art_panel(app.ui, &art);
-            app.backdrops.update(app.renderer, app.cfg.menu_backdrop, app.menu.open());
+            app.backdrops.choose(app.cfg.menu_backdrop_zone());
+            app.backdrops.update(app.renderer, app.cfg.menu_backdrop_on(), app.menu.open());
             MenuBackdrops::Shown zone;
             if (app.backdrops.current(zone)) {
                 auto colour = [](uint32_t argb, uint8_t a) {

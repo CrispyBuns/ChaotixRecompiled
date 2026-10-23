@@ -26,14 +26,27 @@ struct BackdropSpec {
     // shows what lies beyond its edge in the margins, and in the lobby, which
     // the game keeps 4:3.
     bool wide = true;
+    // The zone, as MENU BACKGROUND names it: its `[Video] MenuBackground`
+    // value and the menu's label (issue #37).
+    const char* zone = "";
+    const char* name = "";
 };
 
-// The zones the menu cycles through, each at a time of day that suits it.
+// The zones the menu cycles through, each at a time of day that suits it, in
+// the order they are made and shown.
 const std::vector<BackdropSpec>& backdrop_specs();
+// Indices into backdrop_specs() in the order MENU BACKGROUND offers them: the
+// game's own, the lobby and the island first, then the five attractions.
+const std::vector<int>& backdrop_menu_order();
+// The index of the spec whose `zone` is this (case ignored), or -1.
+int backdrop_find_zone(const std::string& zone);
 
 struct BackdropImage {
     int width = 0, height = 0;
     std::vector<uint32_t> pixels;  // XRGB8888, row-major
+    // 32X sprite draws of the kept frame left out of it (the characters, the
+    // HUD, the tether), and all of its draws: for tests and logs.
+    int hidden_draws = 0, sprite_draws = 0;
 };
 
 // Width added on each side of the 320-pixel picture, so a backdrop is about

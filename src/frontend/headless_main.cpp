@@ -675,8 +675,9 @@ int main(int argc, char** argv) {
             if (!ok) { std::printf("backdrop %s: %s\n", spec.key, why.c_str()); ++failed; continue; }
             const std::string path = backdrop_dir + "/" + spec.key + ".png";
             write_png(path, img.pixels.data(), img.width, img.height, img.width);
-            std::printf("backdrop %s: %dx%d in %.0f ms, tint %08X -> %s\n", spec.key, img.width, img.height, ms,
-                        unsigned(backdrop_tint(img)), path.c_str());
+            std::printf("backdrop %s: %dx%d in %.0f ms, tint %08X, %d of %d sprites left out -> %s\n", spec.key,
+                        img.width, img.height, ms, unsigned(backdrop_tint(img)), img.hidden_draws, img.sprite_draws,
+                        path.c_str());
         }
         return failed ? 1 : 0;
     }

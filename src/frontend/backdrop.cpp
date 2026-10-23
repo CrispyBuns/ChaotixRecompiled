@@ -1,6 +1,7 @@
 #include "frontend/backdrop.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <memory>
 #include <thread>
@@ -16,10 +17,13 @@ namespace chaotix {
 
 namespace {
 
-// The 32X banks left out of a backdrop: the eight characters (both sets) and
-// the HUD's labels and digits (docs/SPRITES_32X.md).
+// The 32X banks left out of a backdrop: the eight characters (both sets), the
+// HUD's labels and digits (docs/SPRITES_32X.md), and the seven dots of the
+// tether between the two characters (bank 29, scaled, found with
+// --sprites-log in every zone).
 constexpr int kCharacterBanks = 16;
 constexpr int kHudBank = 0x13;
+constexpr int kTetherBank = 29;
 
 std::shared_ptr<const SpritePack> hide_characters_and_hud() {
     auto pack = std::make_shared<SpritePack>();
@@ -31,6 +35,7 @@ std::shared_ptr<const SpritePack> hide_characters_and_hud() {
     for (int frame = 0; frame < 256; ++frame) {
         for (int bank = 0; bank < kCharacterBanks; ++bank) pack->add(bank, frame, nothing);
         pack->add(kHudBank, frame, nothing);
+        pack->add(kTetherBank, frame, nothing);
     }
     return pack;
 }
@@ -41,16 +46,45 @@ const std::vector<BackdropSpec>& backdrop_specs() {
     // Times of day chosen for variety across the cycle, Marina Madness at
     // sunset because that is the picture issue #8 asked for. The levels are
     // ones whose starting view is a good picture: Botanic Base 1 starts by
-    // its left edge, which shows tiles from beyond it.
+    // its left edge, which shows tiles from beyond it. WORLD ENTRANCE is the
+    // lobby (place 7, level 0: the hall with EXIT and PLAY), which the game
+    // keeps 4:3; ISOLATED ISLAND is the outdoor level the game opens with
+    // (INTRODUCTION, place 6, level 0), whose start is a clean wide view.
     static const std::vector<BackdropSpec> specs = {
-        {4, 2, 4, "marina_madness_sunset", true},
-        {0, 3, 0, "botanic_base_morning", true},
-        {1, 1, 6, "speed_slider_night", true},
-        {3, 1, 4, "techno_tower_sunset", true},
-        {2, 2, 2, "amazing_arena_day", true},
-        {7, 0, 4, "isolated_island_sunset", false},
+        {4, 2, 4, "marina_madness_sunset", true, "MarinaMadness", "MARINA MADNESS"},
+        {0, 3, 0, "botanic_base_morning", true, "BotanicBase", "BOTANIC BASE"},
+        {1, 1, 6, "speed_slider_night", true, "SpeedSlider", "SPEED SLIDER"},
+        {3, 1, 4, "techno_tower_sunset", true, "TechnoTower", "TECHNO TOWER"},
+        {2, 2, 2, "amazing_arena_day", true, "AmazingArena", "AMAZING ARENA"},
+        {7, 0, 4, "world_entrance_sunset", false, "WorldEntrance", "WORLD ENTRANCE"},
+        {6, 0, 2, "isolated_island_day", true, "IsolatedIsland", "ISOLATED ISLAND"},
     };
     return specs;
+}
+
+const std::vector<int>& backdrop_menu_order() {
+    static const std::vector<int> order = [] {
+        static const char* const zones[] = {"WorldEntrance", "IsolatedIsland", "BotanicBase", "MarinaMadness",
+                                            "SpeedSlider", "AmazingArena", "TechnoTower"};
+        std::vector<int> o;
+        for (const char* z : zones)
+            if (const int i = backdrop_find_zone(z); i >= 0) o.push_back(i);
+        return o;
+    }();
+    return order;
+}
+
+int backdrop_find_zone(const std::string& zone) {
+    const auto& specs = backdrop_specs();
+    for (size_t i = 0; i < specs.size(); ++i) {
+        const std::string z = specs[i].zone;
+        if (z.size() == zone.size() &&
+            std::equal(z.begin(), z.end(), zone.begin(), [](char a, char b) {
+                return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+            }))
+            return int(i);
+    }
+    return -1;
 }
 
 bool render_backdrop(const Rom& rom, const BackdropSpec& spec, BackdropImage& out, std::string* why,
@@ -107,6 +141,11 @@ bool render_backdrop(const Rom& rom, const BackdropSpec& spec, BackdropImage& ou
     out.pixels.resize(size_t(out.width) * size_t(out.height));
     for (int y = 0; y < out.height; ++y)
         std::copy_n(m->framebuffer + size_t(y) * kScreenWidth, out.width, out.pixels.data() + size_t(y) * size_t(out.width));
+    out.hidden_draws = out.sprite_draws = 0;
+    for (const SpriteDraw& d : recorder->displayed(*m).draws) {
+        ++out.sprite_draws;
+        out.hidden_draws += (d.bank >= 0 && d.bank < kCharacterBanks) || d.bank == kHudBank || d.bank == kTetherBank;
+    }
     return true;
 }
 

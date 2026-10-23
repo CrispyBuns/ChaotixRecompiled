@@ -3,10 +3,12 @@
 // font and a menu backdrop rendered on a machine of its own.
 #include "renderer/game_font.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -304,5 +306,44 @@ TEST(game_font, a_paused_backdrop_makes_no_progress_and_resumes) {
     held_worker.join();
     CHECK(!cancelled_ok);
     CHECK_EQ(stop.frames.load(), uint64_t(0));
+}
+
+TEST(game_font, the_game_own_zones_render_as_backdrops) {
+    // Issue #37: WORLD ENTRANCE (the lobby, kept 4:3) and ISOLATED ISLAND
+    // (the opening level, wide) are pictures like the attractions: the place
+    // itself, not a blank or a stray scene, with the characters, the tether
+    // and the HUD left out.
+    Rom rom;
+    std::string err;
+    CHECK(rom.load(CHAOTIX_TEST_ROM, &err));
+    struct Want { const char* zone; int width; };
+    for (const Want& want : {Want{"WorldEntrance", 320}, Want{"IsolatedIsland", 320 + 2 * kBackdropWideExtra}}) {
+        const int index = backdrop_find_zone(want.zone);
+        CHECK(index >= 0);
+        if (index < 0) continue;
+        BackdropImage image;
+        std::string why;
+        CHECK(render_backdrop(rom, backdrop_specs()[size_t(index)], image, &why));
+        CHECK_EQ(image.width, want.width);
+        CHECK_EQ(image.height, 224);
+        // Many colours, none of them covering most of the picture (a blank
+        // or a flat scene such as a fade has one colour nearly everywhere).
+        std::map<uint32_t, size_t> count;
+        for (uint32_t p : image.pixels) ++count[p & 0xFFFFFF];
+        size_t most = 0;
+        for (const auto& [colour, n] : count) most = std::max(most, n);
+        CHECK(count.size() > 16);  // 32 and 60 here; a fade or a blank has a handful
+        CHECK(most * 4 < image.pixels.size());
+        // Each quarter of the picture has something in it: not a black band.
+        for (int q = 0; q < 4; ++q) {
+            std::set<uint32_t> colours;
+            for (int y = (q / 2) * 112; y < (q / 2 + 1) * 112; ++y)
+                for (int x = (q % 2) * image.width / 2; x < (q % 2 + 1) * image.width / 2; ++x)
+                    colours.insert(image.pixels[size_t(y) * size_t(image.width) + size_t(x)] & 0xFFFFFF);
+            CHECK(colours.size() > 8);
+        }
+        // The characters were in the frame and were left out of it.
+        CHECK(image.hidden_draws > 0);
+    }
 }
 #endif

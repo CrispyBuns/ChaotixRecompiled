@@ -848,7 +848,8 @@ TEST(menu, the_menus_look_is_an_extras_setting_and_is_kept) {
     Config cfg;
     cfg.set_defaults();
     CHECK(cfg.menu_game_font);
-    CHECK(cfg.menu_backdrop);
+    CHECK(cfg.menu_backdrop_on());
+    CHECK_STR(cfg.menu_background, "Cycle");
     Menu m;
     m.bind(cfg);
     open_category(m, "EXTRAS");
@@ -856,16 +857,90 @@ TEST(menu, the_menus_look_is_an_extras_setting_and_is_kept) {
     CHECK(m.on_key(SDLK_RIGHT));
     CHECK(!cfg.menu_game_font);
     CHECK(select_row(m, "MENU BACKGROUND"));
-    CHECK(m.on_key(SDLK_LEFT));
-    CHECK(!cfg.menu_backdrop);
+    CHECK_STR(m.selected_value(), "CYCLE");
+    CHECK(m.on_key(SDLK_LEFT));  // wraps round to the last choice
+    CHECK(!cfg.menu_backdrop_on());
+    CHECK_STR(m.selected_value(), "PLAIN");
 
     const std::string path = "menu_look_test.ini";
     CHECK(cfg.save(path));
     Config back;
     CHECK(back.load(path));
     CHECK(!back.menu_game_font);
-    CHECK(!back.menu_backdrop);
+    CHECK(!back.menu_backdrop_on());
     std::remove(path.c_str());
+}
+
+TEST(menu, the_menu_background_can_be_any_one_zone) {
+    // Issue #37: CYCLE, each of the seven zones by name, PLAIN; left and
+    // right step through them and wrap.
+    Config cfg;
+    cfg.set_defaults();
+    Menu m;
+    m.bind(cfg);
+    open_category(m, "EXTRAS");
+    CHECK(select_row(m, "MENU BACKGROUND"));
+    const char* const shown[] = {"WORLD ENTRANCE", "ISOLATED ISLAND", "BOTANIC BASE", "MARINA MADNESS",
+                                 "SPEED SLIDER", "AMAZING ARENA", "TECHNO TOWER", "PLAIN", "CYCLE"};
+    const char* const kept[] = {"WorldEntrance", "IsolatedIsland", "BotanicBase", "MarinaMadness",
+                                "SpeedSlider", "AmazingArena", "TechnoTower", "Plain", "Cycle"};
+    for (size_t i = 0; i < std::size(shown); ++i) {
+        CHECK(m.on_key(SDLK_RIGHT));
+        CHECK_STR(m.selected_value(), shown[i]);
+        CHECK_STR(cfg.menu_background, kept[i]);
+        CHECK_EQ(cfg.menu_backdrop_on(), i != 7);
+        // A zone's index is its picture's; CYCLE and PLAIN have none.
+        const int zone = cfg.menu_backdrop_zone();
+        CHECK_EQ(zone >= 0, i < 7);
+        if (zone >= 0) CHECK_STR(backdrop_specs()[size_t(zone)].name, shown[i]);
+    }
+    CHECK(m.on_key(SDLK_LEFT));
+    CHECK_STR(m.selected_value(), "PLAIN");
+
+    // Every value is saved as itself and read back.
+    const std::string path = "menu_background_test.ini";
+    for (const char* v : kept) {
+        cfg.menu_background = v;
+        CHECK(cfg.save(path));
+        Config back;
+        CHECK(back.load(path));
+        CHECK_STR(back.menu_background, v);
+    }
+    std::remove(path.c_str());
+
+    // How a value is read: case does not matter, the earlier ZONE is CYCLE,
+    // and anything unknown is CYCLE too.
+    CHECK_STR(parse_menu_background("Zone"), "Cycle");
+    CHECK_STR(parse_menu_background("zone"), "Cycle");
+    CHECK_STR(parse_menu_background("plain"), "Plain");
+    CHECK_STR(parse_menu_background("worldentrance"), "WorldEntrance");
+    CHECK_STR(parse_menu_background("MARINAMADNESS"), "MarinaMadness");
+    CHECK_STR(parse_menu_background("Moon"), "Cycle");
+    CHECK_STR(parse_menu_background(""), "Cycle");
+    for (const char* legacy : {"Zone", "Plain"}) {
+        std::FILE* f = std::fopen(path.c_str(), "w");
+        CHECK(f != nullptr);
+        if (!f) return;
+        std::fprintf(f, "[Video]\nMenuBackground = %s\n", legacy);
+        std::fclose(f);
+        Config old;
+        CHECK(old.load(path));
+        CHECK_STR(old.menu_background, std::string(legacy) == "Zone" ? "Cycle" : "Plain");
+    }
+    std::remove(path.c_str());
+}
+
+TEST(menu, a_chosen_zone_stays_and_cycle_moves_on) {
+    // MenuBackdrops without a ROM or renderer: only the choosing, which needs
+    // neither. A chosen zone is not left by advance().
+    MenuBackdrops b;
+    CHECK_EQ(b.chosen(), -1);
+    b.choose(backdrop_find_zone("WorldEntrance"));
+    CHECK_EQ(b.chosen(), backdrop_find_zone("WorldEntrance"));
+    b.choose(99);  // not a zone: CYCLE
+    CHECK_EQ(b.chosen(), -1);
+    CHECK_EQ(backdrop_find_zone("Moon"), -1);
+    CHECK_EQ(int(backdrop_menu_order().size()), int(backdrop_specs().size()));
 }
 
 namespace {
@@ -973,7 +1048,7 @@ TEST(menu, a_zone_picture_fills_the_panel_when_asked) {
         return int((p >> 16) & 0xFF);
     };
     const int zone = panel_red();
-    cfg.menu_backdrop = false;
+    cfg.menu_background = "Plain";
     const int plain = panel_red();
     CHECK(zone > 30);    // the red shows through the tint
     CHECK(plain < 30);   // the theme's near-black
@@ -1021,6 +1096,51 @@ TEST(menu, zone_pictures_are_made_only_while_a_menu_is_open) {
         CHECK(b.paused());
         b.shutdown();                         // a held worker still stops
         CHECK(!b.busy());
+    }
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST(menu, a_chosen_zone_is_made_first_and_alone) {
+    // Issue #37: with one zone chosen, its picture is made ahead of the
+    // others (a picture already being made for CYCLE is given up for it),
+    // shown alone, and nothing else is made.
+    Drawn d;
+    CHECK(d.ok);
+    if (!d.ok) return;
+    Rom rom;
+    std::string err;
+    CHECK(rom.load(CHAOTIX_TEST_ROM, &err));
+    const std::string dir = "backdrop_choice_test/";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    {
+        MenuBackdrops b;
+        b.configure(rom, dir);
+        b.update(d.renderer, true, true);  // CYCLE: the first zone is started
+        CHECK(b.busy());
+        for (int i = 0; i < 400 && b.frames_emulated() < 30; ++i) SDL_Delay(5);
+        const int lobby = backdrop_find_zone("WorldEntrance");
+        b.choose(lobby);
+        MenuBackdrops::Shown shown;
+        CHECK(!b.current(shown));          // plain until it is made
+        for (int i = 0; i < 6000 && !b.current(shown); ++i) {
+            b.update(d.renderer, true, true);
+            SDL_Delay(5);
+        }
+        CHECK(b.current(shown));
+        CHECK_EQ(int(shown.width), 320);   // the lobby, 4:3
+        CHECK_EQ(b.ready_count(), 1);      // the first zone was given up
+        b.advance();                       // a chosen zone stays
+        CHECK(b.current(shown));
+        CHECK_EQ(int(shown.width), 320);
+        for (int i = 0; i < 20; ++i) b.update(d.renderer, true, true);
+        CHECK(!b.busy());                  // and nothing else is made
+        // Back to CYCLE: the others are made, the lobby still shown meanwhile.
+        b.choose(-1);
+        b.update(d.renderer, true, true);
+        CHECK(b.busy());
+        CHECK(b.current(shown));
+        b.shutdown();
     }
     std::filesystem::remove_all(dir, ec);
 }
