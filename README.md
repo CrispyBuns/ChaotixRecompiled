@@ -115,7 +115,7 @@ and the app's Documents on iOS (the Files app's On My iPhone > Chaotix).
 | F6 | True widescreen on/off (applies from the next level load; resizing the window applies at once) |
 | F7 | Achievements (the menu's Awards page) |
 | F11, Alt+Enter | Borderless fullscreen |
-| Tab (hold) | Fast-forward |
+| Tab (hold) | Fast-forward (on a pad, the right trigger; see Fast-forward below) |
 | F12 | Screenshot |
 
 The menu is the front end: it is up as soon as the program starts, a screen of
@@ -125,7 +125,7 @@ and dimmed. The art is the game drawing its own title screen, from your ROM,
 so nothing is extracted or shipped.
 
 OPTIONS is split into VIDEO (widescreen, aspect ratio, scaling, screen),
-SOUND (the volumes), INPUT (touch controls, 6-button pad) and EXTRAS (cheats,
+SOUND (the volumes), INPUT (touch controls, fast-forward, 6-button pad) and EXTRAS (cheats,
 the menu's look, awards, and on Android the Mods folder).
 
 The menu is written in the game's own font -- the white digits and shaded
@@ -210,6 +210,33 @@ leaves alone - left stick click (the default), right stick click,
 Guide/Home/PS, the touchpad click, or Share/Capture. The same button backs
 out of the menu again.
 
+### Fast-forward
+
+FAST FORWARD KEY (Tab to begin with; press Enter, then the key) and FAST
+FORWARD PAD (the right trigger to begin with; also the left trigger, either
+stick click, Guide/Home/PS, the touchpad click, Share/Capture or NONE -- never
+one the emulated pad uses, nor the MENU BUTTON) are on the CONTROLS page.
+OPTIONS > INPUT has the rest:
+
+- TOUCH FAST FORWARD (OFF by default) adds a small fast-forward button to the
+  touch controls, in the top-left corner, which both touch layouts leave
+  empty. Its image is `ff.bmp` in `Mods/Touch`.
+- FAST FORWARD: HOLD (on while held, the default) or TOGGLE (each press turns
+  it on or off; the touch button stays lit while it is on).
+- FAST FORWARD SPEED: 2X and 4X run exactly two or four frames of the game
+  for every frame at the normal pace, and keep the sound -- all of it, played
+  that many times faster, so it is higher but unbroken. MAX (the default, and
+  what Tab always did) runs as fast as the machine allows, up to eight frames
+  for every picture shown, and is silent because it has no steady speed to
+  play the sound at.
+
+Fast-forward only runs more frames of the same game, so the game behaves
+exactly as it would have. It does nothing during a TIME ATTACK run (the touch
+button is not shown either), so every record is set at the game's own speed,
+nor while the menu is open. In the settings file: `FastForwardKey`,
+`FastForwardButton`, `TouchFastForward`, `FastForwardMode` (Hold | Toggle)
+and `FastForwardSpeed` (2x | 4x | Max) in `[Input]`.
+
 OPTIONS > EXTRAS has RESET AWARDS, which asks twice before locking everything again.
 
 On-screen touch controls appear once the screen is touched (`TouchControls =
@@ -251,7 +278,7 @@ effects take over some of the music's channels while they play, and those
 channels follow EFFECTS for that time; see `src/audio/volumes.h`.
 
 Touch controls can be reskinned: BMP images named after the buttons
-(`dpad.bmp`, `a.bmp` ... `start.bmp`, `button.bmp` for all face buttons,
+(`dpad.bmp`, `a.bmp` ... `start.bmp`, `ff.bmp`, `button.bmp` for all face buttons,
 `<name>_pressed.bmp` while held) in `Mods/Touch`. The folder holds a
 README.txt that lists them.
 

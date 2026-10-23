@@ -146,3 +146,32 @@ TEST(input, touch_sonic_cd_layout) {
     t.layout(1920, 1080, false, false);
     CHECK_EQ(t.hit(1300, 700), uint16_t(0));
 }
+
+TEST(input, touch_fast_forward_button) {
+    // Issue #45: off unless asked for; top left when it is, clear of every
+    // other control in both layouts, and outside Sonic CD's jump area.
+    for (bool sonic_cd : {false, true}) {
+        for (bool stick : {false, true}) {
+            TouchControls t;
+            t.layout(1920, 1080, stick, sonic_cd);
+            for (const auto& b : t.buttons()) CHECK(b.mask != TOUCH_FAST_FORWARD);
+            t.layout(1920, 1080, stick, sonic_cd, true);
+            CHECK(t.buttons()[0].is_dpad);  // the joystick still comes first
+            const TouchButton* ff = nullptr;
+            for (const auto& b : t.buttons())
+                if (b.mask == TOUCH_FAST_FORWARD) ff = &b;
+            CHECK(ff != nullptr);
+            if (!ff) continue;
+            CHECK(ff->cx < 1920 * 0.25f && ff->cy < 1080 * 0.25f);
+            CHECK_EQ(t.hit(ff->cx, ff->cy), TOUCH_FAST_FORWARD);
+            for (const auto& b : t.buttons()) {
+                if (&b == ff) continue;
+                const float dx = b.cx - ff->cx, dy = b.cy - ff->cy;
+                const float reach = (b.is_dpad ? 1.3f : 1.15f) * b.r + 1.15f * ff->r;
+                CHECK(dx * dx + dy * dy > reach * reach);
+            }
+            // A finger elsewhere does not touch it.
+            CHECK(!(t.hit(960, 540) & TOUCH_FAST_FORWARD));
+        }
+    }
+}

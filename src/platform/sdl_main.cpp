@@ -99,6 +99,7 @@ struct App {
     std::map<SDL_FingerID, uint16_t> fingers;
     bool running = true;
     bool fast_forward = false;
+    FastForwardState ff_state;  // held or toggled (issue #45)
     int overlay_page = 0;
     FrameTiming timing;
     std::vector<uint32_t> watches = {0xFFF000, 0xFFF010};
@@ -491,6 +492,25 @@ SDL_GamepadButton menu_pad_button(const App& app) {
     return b == SDL_GAMEPAD_BUTTON_INVALID ? SDL_GAMEPAD_BUTTON_LEFT_STICK : b;
 }
 
+// Whether anything bound to fast-forward is down (issue #45): its key, its
+// button on any connected pad (a trigger counts past half way), or the
+// on-screen button. Fast-forward is not a player's, so every pad answers.
+bool fast_forward_held(const App& app, uint16_t touch_held) {
+    if (touch_held & TOUCH_FAST_FORWARD) return true;
+    const SDL_Scancode sc = SDL_GetScancodeFromName(app.cfg.ff_key.c_str());
+    if (sc != SDL_SCANCODE_UNKNOWN && SDL_GetKeyboardState(nullptr)[sc]) return true;
+    const SDL_GamepadButton b = SDL_GetGamepadButtonFromString(app.cfg.ff_button.c_str());
+    const SDL_GamepadAxis axis = b == SDL_GAMEPAD_BUTTON_INVALID
+                                     ? SDL_GetGamepadAxisFromString(app.cfg.ff_button.c_str())
+                                     : SDL_GAMEPAD_AXIS_INVALID;
+    const bool trigger = axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+    for (SDL_Gamepad* g : app.pads) {
+        if (b != SDL_GAMEPAD_BUTTON_INVALID && SDL_GetGamepadButton(g, b)) return true;
+        if (trigger && SDL_GetGamepadAxis(g, axis) > 16384) return true;
+    }
+    return false;
+}
+
 // A stage the front end asked for is taken at the game's mode dispatcher, and
 // the title screen only gets back there once it is done with itself: one press
 // of Start gets past its animation, another leaves it. So Start is tapped
@@ -694,6 +714,7 @@ void load_touch_skin(App& app, const std::string& dir) {
             std::fputs("Touch control images. Put BMP files here (32-bit keeps transparency):\n"
                        "  dpad.bmp a.bmp b.bmp c.bmp x.bmp y.bmp z.bmp start.bmp\n"
                        "  stick.bmp and knob.bmp for the joystick (OPTIONS > INPUT > TOUCH STICK).\n"
+                       "  ff.bmp for fast-forward (OPTIONS > INPUT > TOUCH FAST FORWARD).\n"
                        "  button.bmp is used for any face button without its own file.\n"
                        "  <name>_pressed.bmp is drawn while that button is held.\n"
                        "Each image is stretched to the button's square; a missing one is drawn as before.\n",
@@ -702,7 +723,7 @@ void load_touch_skin(App& app, const std::string& dir) {
         }
     }
     int loaded = 0;
-    for (const char* name : {"dpad", "stick", "knob", "a", "b", "c", "x", "y", "z", "start", "button"}) {
+    for (const char* name : {"dpad", "stick", "knob", "a", "b", "c", "x", "y", "z", "start", "ff", "button"}) {
         for (int pressed = 0; pressed < 2; ++pressed) {
             const std::string path = dir + "/" + name + (pressed ? "_pressed" : "") + ".bmp";
             SDL_Surface* s = SDL_LoadBMP(path.c_str());
@@ -901,7 +922,7 @@ void apply_rom_patches(App& app) {
 SDL_Texture* touch_image(const App& app, const TouchButton& b, bool on) {
     std::string name = b.is_dpad ? "dpad" : b.label;
     std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) { return char(std::tolower(ch)); });
-    for (const std::string& n : {name, std::string(b.is_dpad || name == "start" ? "" : "button")}) {
+    for (const std::string& n : {name, std::string(b.is_dpad || name == "start" || name == "ff" ? "" : "button")}) {
         auto it = app.touch_skin.find(n);
         if (n.empty() || it == app.touch_skin.end()) continue;
         if (on && it->second[1]) return it->second[1];
@@ -1030,7 +1051,12 @@ void draw_touch_controls(App& app, uint16_t held) {
         fill_circle(app.renderer, b.cx, b.cy, b.r,
                     on ? colour(0.38f, 0.60f, 1.0f, true, 150) : colour(0.05f, 0.06f, 0.10f, false, 120));
         fill_ring(app.renderer, b.cx, b.cy, b.r * 0.88f, b.r, colour(1, 1, 1, on, 220));
-        if (app.ui.ready()) {
+        if (b.mask == TOUCH_FAST_FORWARD) {
+            // The usual fast-forward sign, two arrow heads, for a label.
+            const float s = b.r * 0.32f;
+            fill_arrow(app.renderer, b.cx - s, b.cy, 1, 0, s, colour(1, 1, 1, on, 255));
+            fill_arrow(app.renderer, b.cx + s * 0.6f, b.cy, 1, 0, s, colour(1, 1, 1, on, 255));
+        } else if (app.ui.ready()) {
             const ui::Font f = ui::Font::Pixel;
             const std::string label = b.label;
             const float w = app.ui.text_width(f, label), lh = app.ui.line_height(f);
@@ -1443,8 +1469,10 @@ int main(int argc, char** argv) {
         // than the monitor refresh rate, remains the simulation clock.
         // Use the previous pass's fast-forward state; a Tab transition takes
         // effect when events are polled below, within at most one game frame.
+        // Only MAX is unthrottled: 2X and 4X keep the normal pacing and run
+        // more frames per period instead.
         uint64_t now = pace_frame(accumulator, last, frame_ticks, freq,
-            app.fast_forward || app.autotest_frames != 0,
+            (app.fast_forward && app.cfg.ff_speed == FastForwardSpeed::Max) || app.autotest_frames != 0,
             [] { return SDL_GetPerformanceCounter(); },
             [](uint64_t ns) { SDL_DelayPrecise(ns); });
         SDL_Event e;
@@ -1499,14 +1527,16 @@ int main(int argc, char** argv) {
             default: break;
             }
         }
-        const bool* ks = SDL_GetKeyboardState(nullptr);
-        app.fast_forward = ks[SDL_SCANCODE_TAB];
-
         // Unified input: keyboard | gamepads | touch -> InputState. While the
         // menu is open it takes the controls, so driving it does not also move
         // the character.
         uint16_t touch_held = 0;
         for (const auto& [id, b] : app.fingers) touch_held |= b;
+        // Fast-forward (issue #45) is never on during a time attack run, so a
+        // record is set at the game's own speed, nor under the menu.
+        app.fast_forward = app.ff_state.update(fast_forward_held(app, touch_held), app.cfg.ff_mode,
+                                               app.ta.running || app.menu.open());
+        touch_held &= uint16_t(~TOUCH_FAST_FORWARD);  // not the game's
         uint16_t raw = 0, raw2 = 0;
         // Emulated frames advance in batches, so a window of frame numbers can
         // be stepped straight over: arm on reaching the frame, then hold for a
@@ -1547,15 +1577,16 @@ int main(int argc, char** argv) {
             app.start_stage(app.cli_stage);
         }
         int steps = 0;
-        const int max_steps = app.fast_forward ? 8 : 3;
+        // How many frames this pass: one per elapsed frame period (at most
+        // 3), 2X / 4X that many times over, MAX 8 without waiting.
+        const PassPlan plan = plan_pass(accumulator, frame_ticks, app.fast_forward, app.cfg.ff_speed);
         uint64_t emu_t0 = SDL_GetPerformanceCounter();
         const bool autotest = app.autotest_frames != 0;
         // With scripted host input the loop runs one emulated frame per pass,
         // so a "hold for N frames" means N frames rather than N batches of up
         // to 64 - the difference between a tap and holding the button down.
         const int autotest_batch = app.host_script.empty() ? 64 : 1;
-        while ((accumulator >= frame_ticks || app.fast_forward || autotest) &&
-               steps < (autotest ? autotest_batch : max_steps)) {
+        while (steps < (autotest ? autotest_batch : plan.frames)) {
             if (autotest && app.m->frame_count >= app.autotest_frames) break;
             // Scripted keys are pushed as events and handled on the next pass
             // round the event loop, exactly like a key someone pressed.
@@ -1595,10 +1626,11 @@ int main(int argc, char** argv) {
                     app.achievements.save_progress(achievements_progress_path(app));
                 });
             }
-            if (!app.fast_forward) accumulator -= frame_ticks;
+            if (autotest && !app.fast_forward) accumulator -= frame_ticks;
             ++steps;
         }
-        if (app.fast_forward) accumulator = 0;
+        if (!autotest) accumulator = plan.reset_accumulator ? 0 : accumulator - plan.ticks * frame_ticks;
+        else if (app.fast_forward) accumulator = 0;
         if (app.m->vdp.tiles != app.tiles) app.m->vdp.tiles = app.tiles;
         if (app.m->characters != app.character_palettes) app.m->characters = app.character_palettes;
         if (TileReplacer* t = app.tiles.get()) {
@@ -1619,17 +1651,20 @@ int main(int argc, char** argv) {
         if (app.audio) {
             // VOLUME takes effect at once, not at the next start.
             SDL_SetAudioStreamGain(app.audio, float(app.cfg.volume) / 100.0f);
+            // Fast-forward at 2X / 4X makes sound exactly that many times
+            // faster than it plays, so all of it is kept and played that many
+            // times faster: continuous, only higher. MAX has no steady rate
+            // to play it at, so its sound is dropped, as it always was.
+            const int speed = app.fast_forward ? fast_forward_multiplier(app.cfg.ff_speed) : 1;
             if (!app.m->audio_out.empty()) {
-                if (app.fast_forward) app.m->audio_out.clear();
-                else {
+                if (speed > 0)
                     SDL_PutAudioStreamData(app.audio, app.m->audio_out.data(), int(app.m->audio_out.size() * sizeof(int16_t)));
-                    app.m->audio_out.clear();
-                }
+                app.m->audio_out.clear();
             }
             const double target = kAudioRate * 0.05 * 4;  // bytes queued for 50 ms (stereo s16)
             double queued = double(SDL_GetAudioStreamQueued(app.audio));
             double err = (queued - target) / target;
-            float ratio = float(1.0 + std::clamp(err * 0.01, -0.01, 0.01));
+            float ratio = float(std::max(speed, 1) * (1.0 + std::clamp(err * 0.01, -0.01, 0.01)));
             SDL_SetAudioStreamFrequencyRatio(app.audio, ratio);
             if (queued > target * 6) SDL_ClearAudioStream(app.audio);  // after a stall
         } else {
@@ -1682,8 +1717,10 @@ int main(int argc, char** argv) {
             SDL_RenderTexture(app.renderer, app.texture, &src, &art);
         }
         if (app.touch_enabled) {
-            app.touch.layout(ow, oh, app.cfg.touch_stick, app.cfg.touch_sonic_cd);
-            draw_touch_controls(app, touch_held);
+            // The fast-forward button is not there during a time attack run,
+            // and is lit while fast-forward is on (TOGGLE leaves it on).
+            app.touch.layout(ow, oh, app.cfg.touch_stick, app.cfg.touch_sonic_cd, app.cfg.touch_ff && !app.ta.running);
+            draw_touch_controls(app, uint16_t(touch_held | (app.fast_forward ? TOUCH_FAST_FORWARD : 0)));
         }
         if (app.ui.ready()) {
             app.menu.draw(app.ui, app.achievements);

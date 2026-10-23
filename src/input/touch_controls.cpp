@@ -5,7 +5,7 @@
 
 namespace chaotix {
 
-void TouchControls::layout(int w, int h, bool stick, bool sonic_cd) {
+void TouchControls::layout(int w, int h, bool stick, bool sonic_cd, bool fast_forward) {
     buttons_.clear();
     if (stick != stick_ && stick_held_) lift(stick_finger_);
     stick_ = stick;
@@ -20,6 +20,14 @@ void TouchControls::layout(int w, int h, bool stick, bool sonic_cd) {
     buttons_.push_back({0, margin + pad_r, float(h) - margin - pad_r, pad_r, stick ? "STICK" : "D-PAD", true});
     const float bx = float(w) - margin - btn_r;
     const float by = float(h) - margin - btn_r;
+    // Fast-forward top-left, the size of START: clear of the directions below
+    // it, START in the middle, the award counter top-right, and the Sonic CD
+    // layout's jump area (the lower right). After the directions, which the
+    // joystick expects first.
+    if (fast_forward) {
+        const float fr = btn_r * 0.6f;
+        buttons_.push_back({TOUCH_FAST_FORWARD, margin + fr, margin + fr, fr, "FF", false});
+    }
     if (sonic_cd) {
         const float jump_r = unit * 0.13f;
         const float jx = float(w) - margin - jump_r, jy = float(h) - margin - jump_r;

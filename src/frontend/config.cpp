@@ -127,6 +127,13 @@ bool Config::load(const std::string& path) {
             else if (k == "Device1") device[0] = v;
             else if (k == "Device2") device[1] = v;
             else if (k == "MenuButton") menu_button = v;
+            else if (k == "FastForwardKey") ff_key = v;
+            else if (k == "FastForwardButton") ff_button = v;
+            else if (k == "TouchFastForward") touch_ff = parse_bool(v, touch_ff);
+            else if (k == "FastForwardMode") ff_mode = (v == "Toggle" || v == "toggle") ? FastForwardMode::Toggle : FastForwardMode::Hold;
+            else if (k == "FastForwardSpeed")
+                ff_speed = (v == "2x" || v == "2X" || v == "2") ? FastForwardSpeed::X2
+                         : (v == "4x" || v == "4X" || v == "4") ? FastForwardSpeed::X4 : FastForwardSpeed::Max;
             else if (k.rfind("Key.", 0) == 0) keys[k.substr(4)] = v;
             else if (k.rfind("Key2.", 0) == 0) keys2[k.substr(5)] = v;
             else if (k.rfind("Pad2.", 0) == 0) pads2[k.substr(5)] = v;
@@ -202,6 +209,12 @@ bool Config::save(const std::string& path) const {
     std::fprintf(f, "# Gamepad button that opens this menu (the emulated pad uses every other one):\n");
     std::fprintf(f, "# leftstick | rightstick | guide | touchpad | misc1\n");
     std::fprintf(f, "MenuButton = %s\n", menu_button.c_str());
+    std::fprintf(f, "# Fast-forward: a key, a gamepad button (as MenuButton, or lefttrigger | righttrigger | none),\n");
+    std::fprintf(f, "# an on-screen button, Hold | Toggle, and 2x | 4x | Max. Never during a time attack run.\n");
+    std::fprintf(f, "FastForwardKey = %s\nFastForwardButton = %s\nTouchFastForward = %s\n", ff_key.c_str(),
+                 ff_button.c_str(), touch_ff ? "true" : "false");
+    std::fprintf(f, "FastForwardMode = %s\nFastForwardSpeed = %s\n", fast_forward_mode_name(ff_mode),
+                 fast_forward_speed_name(ff_speed));
     for (const auto& [b, k] : keys) std::fprintf(f, "Key.%s = %s\n", b.c_str(), k.c_str());
     for (const auto& [b, k] : keys2) std::fprintf(f, "Key2.%s = %s\n", b.c_str(), k.c_str());
     for (const auto& [b, k] : pads) std::fprintf(f, "Pad.%s = %s\n", b.c_str(), k.c_str());
