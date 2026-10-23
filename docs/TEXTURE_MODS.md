@@ -54,6 +54,111 @@ holds is a ROM patch's job, or, for the characters' colours, a
 - The game's view of the VDP (the sprite collision and overflow flags in
   particular) still comes from the original tiles.
 
+## Mega Drive text by tile sequence: `mdtext_<name>.txt` and `mdtext_<name>.png`
+
+The menus' text on the Mega Drive layer (the title menu's SCENARIO QUEST /
+TRAINING / OPTIONS, the OPTIONS screen, the DATA LOAD banners, PLAYER SELECT's
+names in the 8x16 font) is written with a font: one tile per letter (two
+stacked for the 8x16 font), shared by every string. Replacing the "O" tile
+with an `md_` file changes every O. A translation needs to replace whole
+words, so a text pattern names a **run of tiles**, in order, and gives an
+image drawn over that run wherever a plane shows it, and nowhere else.
+
+### Finding the run
+
+With DUMP GRAPHICS on (or `chaotix_headless --dump-graphics DIR`), each
+screen whose plane text is new is also listed in `Mods/Textures/Dump/Text`
+(`DIR/Text`): `text_<n>.txt`, the runs of tiles each plane shows, and
+`text_<n>.png`, the screen at twice the size with each run boxed and
+numbered as in the list (yellow plane A, cyan plane B, magenta the window).
+A screen is listed once its new runs have stayed in place for 10 pictures,
+at most every 30 pictures, so menus are listed and a scrolling level is
+not listed every picture (`<n>` is a picture counter). From the title menu:
+
+```
+# run 3: screen x 128 y 152, 7 tiles (56x8 pixels), plane cell 16,19, palette line 1
+plane A
+row c55f51f079e83c63 c47e6d034eb92447 61289eb94ebec2bf ee6410f28116fbcf c55f51f079e83c63 06e89b91ed8a5c67 262ed75e7586890f
+```
+
+That is OPTIONS: the first and fifth tiles are the same O. A run is a row of
+non-blank tiles; one blank tile inside it (a space between words) is kept,
+two end it. For the 8x16 font the list says which run lies right below
+another at the same place and width: the letters' top and bottom halves.
+
+### The pattern
+
+Copy the run's lines into `Mods/Textures/mdtext_<name>.txt` (any name;
+`mdtext_options.txt`):
+
+```
+# OPTIONS on the title menu
+plane A
+align center
+row c55f51f079e83c63 c47e6d034eb92447 61289eb94ebec2bf ee6410f28116fbcf c55f51f079e83c63 06e89b91ed8a5c67 262ed75e7586890f
+```
+
+- `row`: one row of tiles, left to right, as the dump writes them: the tile's
+  hash (the same as `md_<hash>.png`'s) and, for a flipped tile, `:h`, `:v`
+  or `:hv`. A flipped tile only matches flipped the same way. Several `row`
+  lines make a pattern several tiles high (two for the 8x16 font, top row
+  first); every row has the same number of tiles.
+- `plane A`, `B`, `W` (the window) or `any` (the default); several can be
+  listed.
+- `palette 0`-`3` matches the run only when its tiles are drawn with that
+  palette line; `any` (the default) matches whatever the line. On the title
+  menu the chosen entry is drawn with line 0 and the others with line 1, so
+  one pattern without `palette` covers both, and two with `palette 0` and
+  `palette 1` can draw them differently.
+- `align left` (the default), `center` or `right`: where the image sits when
+  it is not as wide as the run.
+- `#` or `;` starts a comment.
+
+### The image
+
+`mdtext_<name>.png`, next to the `.txt`:
+
+- **Palette-indexed**, like the `md_` tiles: indices 1-15 are the colours of
+  the palette line the run's **first tile** is drawn with, 0 is transparent.
+  So the game's fades and palette changes (the highlighted menu entry) still
+  apply. Full-colour PNGs are refused.
+- **8 pixels high per row** of the pattern (16 for the 8x16 font).
+- **Any width** (1 to 1024 pixels). The run is `8 x tiles` pixels wide (56
+  for OPTIONS). An image of that width is drawn exactly over it. A narrower
+  one is placed by `align`, the rest of the run is transparent. A wider one
+  is placed by `align` too and reaches over the tiles beside the run: there
+  its pixel 0 leaves the plane's own pixels showing, others cover them.
+- Inside the run the image replaces the tiles entirely: its 0 pixels show
+  what is behind the plane (plane B, the backdrop, the 32X layer), as a
+  tile's 0 pixels do. The run's tiles' `md_` replacements do not apply.
+- The image takes the first tile's priority bit, and is drawn as it is (a
+  flipped run's image is not flipped).
+
+### How it is matched
+
+Once a picture, before it is drawn, the planes' name tables are searched for
+the patterns (indexed by their first tile, so the cost is small; nothing is
+done without a pattern). A match is a place in the plane, not on the screen,
+so it scrolls with the plane, by line or by column, as its tiles do. Where
+matches overlap the one with the most tiles wins (then the one whose file
+name sorts first). A cell whose name table entry changes during the picture
+shows its tile again. Like the other replacements this only changes the
+picture: the machine runs as without it, bit-identical in lockstep.
+
+Known limits:
+
+- Text on the 32X layer (the title's PUSH START and copyright, the HUD) is
+  not on a plane; it is replaced as [32X sprites](#32x-sprites-32x_bank_framepng-and-32x_hashpng).
+  Sprites of the Mega Drive VDP are not matched either.
+- A pattern matches whole tiles. Text that the game draws at different tile
+  offsets, or that changes one tile (a digit in DATA 1 / DATA 2), needs a
+  pattern per variant (DATA 1, DATA 2, ...).
+- The search happens once a picture: text the game writes into the name
+  table in the middle of a picture is replaced from the next one.
+- The dump lists the native 320-pixel screen, not the widescreen margins
+  (patterns match there too), and samples each tile row in its middle: on a
+  plane scrolled by a fraction of a tile per line the listed run can differ.
+
 ## 32X sprites: `32x_<bank>_<frame>.png` and `32x_<hash>.png`
 
 - **Names.** A graphic in the game's bank table is named by its bank and
@@ -230,6 +335,19 @@ Known limits:
 - `tile_replace.*` unit tests: sprite and plane tiles replaced, transparency,
   the collision flag following the original tiles both ways, dumping once with
   the palette.
+- `text_replace.*` unit tests: a run drawn from the image and only there;
+  flipped tiles matched by their flip; the image scrolling with the plane;
+  the longest pattern winning; a wider centred image covering its
+  neighbours where it is not 0; the first tile's palette line, and a
+  required one; a cell changed after the match; the window plane; malformed
+  patterns; the tokens; the dump listing the runs once, and a moving run only
+  once it stops.
+- `md_text` (with the ROM): the title menu's OPTIONS run found in the dump
+  and given a synthetic solid image changes the menu picture inside its box
+  only, the title before the menu not at all, in lockstep; a longer pattern
+  wins over a shorter one; a wider centred image reaches past the run; no
+  pattern, or one matching nothing, leaves the pictures byte-identical;
+  malformed patterns are refused with a message.
 - `sprite_replace.*` unit tests: a dumped graphic as its own replacement draws
   exactly the original with every flag, odd positions, the colour offset,
   both scaled blitters; replaced pixels flipped, scaled, stippled, coloured

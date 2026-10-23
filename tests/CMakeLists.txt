@@ -18,6 +18,7 @@ add_executable(chaotix_tests
     test_volumes.cpp
     test_rom_patch.cpp
     test_tile_replace.cpp
+    test_text_replace.cpp
     test_image_io.cpp
     test_sprite_record.cpp
     test_sprite_replace.cpp
@@ -72,6 +73,12 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_tile_pack.py"
                     $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
         set_tests_properties(tile_pack PROPERTIES TIMEOUT 900)
+        # Mega Drive text by tile sequence: OPTIONS on the title menu, found
+        # in the dump, replaced there only, in lockstep; no pattern, no change.
+        add_test(NAME md_text
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_md_text.py"
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
+        set_tests_properties(md_text PROPERTIES TIMEOUT 900)
         # 32X sprite replacement: the graphics dumped in a level, the title,
         # the lobby, the bonus and the special stage, as a pack, change no
         # picture, in widescreen and 4:3, and lockstep holds; changed ones

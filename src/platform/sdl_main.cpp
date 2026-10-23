@@ -763,13 +763,21 @@ void load_tiles(App& app) {
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
     const std::string readme = dir + "/README.txt";
-    // Written when missing, and over the text of older versions, which knew
-    // only the tiles.
+    // Written when missing, and over the text of older versions: the first
+    // knew only the tiles, the next not the text patterns.
     bool write_readme = !std::filesystem::exists(std::filesystem::u8path(readme), ec);
     if (!write_readme) {
         if (FILE* f = std::fopen(readme.c_str(), "r")) {
             char first[64] = {};
-            write_readme = std::fgets(first, sizeof first, f) && std::strncmp(first, "Mega Drive tile replacements:", 29) == 0;
+            if (std::fgets(first, sizeof first, f)) {
+                write_readme = std::strncmp(first, "Mega Drive tile replacements:", 29) == 0;
+                if (std::strncmp(first, "Graphics replacements.", 22) == 0) {
+                    bool knows_text = false;
+                    char line[256];
+                    while (!knows_text && std::fgets(line, sizeof line, f)) knows_text = std::strstr(line, "mdtext_") != nullptr;
+                    write_readme = !knows_text;
+                }
+            }
             std::fclose(f);
         }
     }
@@ -782,6 +790,10 @@ void load_tiles(App& app) {
                        "of the original wherever the game uses it.\n"
                        "\n"
                        "md_<hash>.png: Mega Drive tiles (backgrounds, level art). Keep them 8x8.\n"
+                       "mdtext_<name>.txt with mdtext_<name>.png: Mega Drive text by tile sequence\n"
+                       "(menus written with letter tiles). The dump lists the runs of tiles on screen\n"
+                       "in Dump/Text, with a numbered picture; copy a run's \"plane\" and \"row\" lines\n"
+                       "into the .txt and draw the .png, 8 pixels high per row (docs/TEXTURE_MODS.md).\n"
                        "32x_<bank>_<frame>.png, 32x_<hash>.png: 32X sprites (characters, the HUD,\n"
                        "objects, the title). The image's top-left corner stays where the original's\n"
                        "was; another size is drawn at its own size from there. The colour offsets the\n"
@@ -799,6 +811,10 @@ void load_tiles(App& app) {
     const int n = load_tile_pack(*tiles, dir, &messages);
     for (const auto& m : messages) LOGW("tiles", "%s", m.c_str());
     if (n) LOGI("tiles", "%d tile replacement(s) from %s", n, dir.c_str());
+    messages.clear();
+    const int tn = load_text_pack(*tiles, dir, &messages);
+    for (const auto& m : messages) LOGW("text", "%s", m.c_str());
+    if (tn) LOGI("text", "%d text pattern(s) from %s", tn, dir.c_str());
     tiles->dumping = app.cfg.dump_graphics;
     app.tiles_dir = dir;
     app.tiles = tiles;
@@ -1636,6 +1652,10 @@ int main(int argc, char** argv) {
         if (TileReplacer* t = app.tiles.get()) {
             t->dumping = app.cfg.dump_graphics;
             if (const int n = write_tile_dumps(*t, app.tiles_dir + "/Dump")) LOGI("tiles", "%d tile(s) dumped", n);
+            // The plane text on screen, for mdtext_ patterns.
+            if (write_text_dumps(*t, app.tiles_dir + "/Dump/Text", app.m->framebuffer, app.m->fb_width, app.m->fb_height,
+                                 kScreenWidth, app.m->fb_extra))
+                LOGI("text", "text runs on screen listed in %s/Dump/Text", app.tiles_dir.c_str());
         }
         if (!app.tiles_dir.empty()) {
             update_sprite_recorder(app);

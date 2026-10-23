@@ -334,6 +334,15 @@ copied into `Mods/Textures` replace every frame of that bank at once; a
 frame's own `32x_<bank>_<frame>.png` still wins over its cell
 (`chaotix_headless --export-sheets DIR` does the same from the command line).
 
+Mega Drive text built from letter tiles (the title menu, OPTIONS, PLAYER
+SELECT, the DATA LOAD banners) can be replaced by *sequence* rather than tile
+by tile, for translations: `mdtext_<name>.txt` names a run of tiles, such as
+the seven of "OPTIONS", and `mdtext_<name>.png` is drawn over that run
+wherever a plane shows it, and nowhere else. With DUMP GRAPHICS on, the runs
+of tiles on each screen are listed in `Mods/Textures/Dump/Text`, with a
+numbered screenshot, ready to copy. Details in
+[docs/TEXTURE_MODS.md](docs/TEXTURE_MODS.md#mega-drive-text-by-tile-sequence-mdtext_nametxt-and-mdtext_namepng).
+
 ## Character mods
 
 `Mods/Characters/<name>.ini` (`mighty`, `knuckles`, `charmy`, `vector`,
