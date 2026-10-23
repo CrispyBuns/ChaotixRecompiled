@@ -248,6 +248,9 @@ void render_plane(const Vdp& v, int line, bool planeA, LinePix* out, int xs, int
     if (!planeA) hs_addr += 2;
     int hscroll = ((v.vram[hs_addr & 0xFFFF] << 8) | v.vram[(hs_addr + 1) & 0xFFFF]) & 0x3FF;
     const bool col_vs = (v.reg[11] & 4) != 0;
+    // Text replaced by tile sequence (text_replace.h): this plane's matched
+    // cells, or nullptr (no patterns, or none matched).
+    const TextReplacer::Plane* text = v.tiles ? v.tiles->text.plane(planeA ? 0 : 1, pw, ph) : nullptr;
     // Process runs of pixels that share one tile row: a run ends at a tile
     // edge, the window edge, or a 16-pixel column (per-column V-scroll).
     int x = xs;
@@ -267,9 +270,23 @@ void render_plane(const Vdp& v, int line, bool planeA, LinePix* out, int xs, int
         uint16_t e = uint16_t((v.vram[ea & 0xFFFF] << 8) | v.vram[(ea + 1) & 0xFFFF]);
         int ty = py & 7;
         if (e & 0x1000) ty = 7 - ty;
-        const uint8_t pal = uint8_t((e >> 9) & 0x30), prio = uint8_t((e >> 15) & 1);
+        uint8_t pal = uint8_t((e >> 9) & 0x30), prio = uint8_t((e >> 15) & 1);
+        bool hflip = (e & 0x0800) != 0;
         uint8_t pix[8];
-        if (const uint8_t* rp = v.tiles ? v.tiles->slot(e) : nullptr) {
+        const TextReplacer::Hit* hit = nullptr;
+        const TextReplacer::Hit* over = nullptr;
+        if (text) {
+            const int cell = (py >> 3) * pw + (px >> 3);
+            hit = TextReplacer::run_hit(*text, cell, e);
+            if (!hit) over = TextReplacer::over_hit(*text, cell);
+        }
+        if (hit) {
+            // The image is drawn as it is (no flip), in the first tile's colours.
+            TextReplacer::pixels(*hit, px & ~7, py, pw * 8, ph * 8, pix);
+            pal = hit->pal;
+            prio = hit->prio;
+            hflip = false;
+        } else if (const uint8_t* rp = v.tiles ? v.tiles->slot(e) : nullptr) {
             for (int k = 0; k < 8; ++k) pix[k] = rp[ty * 8 + k];
         } else {
             uint32_t row = ((uint32_t(e) & 0x7FF) << 5) + uint32_t(ty) * 4;
@@ -279,13 +296,22 @@ void render_plane(const Vdp& v, int line, bool planeA, LinePix* out, int xs, int
                 pix[k * 2 + 1] = b & 15;
             }
         }
-        if (v.tiles) v.tiles->used(e, pal >> 4);
-        const bool hflip = (e & 0x0800) != 0;
+        if (v.tiles) v.tiles->used(e, (e >> 13) & 3);
         for (int i = 0; i < run; ++i) {
             int tx = (px & 7) + i;
             uint8_t c = pix[hflip ? 7 - tx : tx];
             out[x - xs + i].color = c ? uint8_t(pal | c) : 0;
             out[x - xs + i].prio = prio;
+        }
+        if (over) {
+            // An image reaching past its run covers this tile where it is not 0.
+            uint8_t ov[8];
+            TextReplacer::pixels(*over, px & ~7, py, pw * 8, ph * 8, ov);
+            for (int i = 0; i < run; ++i)
+                if (const uint8_t c = ov[(px & 7) + i]) {
+                    out[x - xs + i].color = uint8_t(over->pal | c);
+                    out[x - xs + i].prio = over->prio;
+                }
         }
         x += run;
     }
@@ -296,9 +322,27 @@ void render_window(const Vdp& v, int line, LinePix* out, int xs, int x0, int x1)
     const uint32_t nt = h40 ? (uint32_t(v.reg[3] & 0x3C) << 10) : (uint32_t(v.reg[3] & 0x3E) << 10);
     const int pw = h40 ? 64 : 32;
     int ty0 = line >> 3, ty = line & 7;
+    const TextReplacer::Plane* text = v.tiles ? v.tiles->text.plane(2, pw, 32) : nullptr;
     for (int x = x0; x < x1; ++x) {
         uint32_t ea = nt + uint32_t((ty0 * pw + (x >> 3)) * 2);
         uint16_t e = uint16_t((v.vram[ea & 0xFFFF] << 8) | v.vram[(ea + 1) & 0xFFFF]);
+        if (text && ty0 >= 0 && ty0 < 32 && x >= 0 && (x >> 3) < pw) {
+            // Text replaced by tile sequence (text_replace.h).
+            const int cell = ty0 * pw + (x >> 3);
+            const TextReplacer::Hit* hit = TextReplacer::run_hit(*text, cell, e);
+            const TextReplacer::Hit* h = hit ? hit : TextReplacer::over_hit(*text, cell);
+            if (h) {
+                uint8_t px8[8];
+                TextReplacer::pixels(*h, x & ~7, line, pw * 8, 32 * 8, px8);
+                const uint8_t c = px8[x & 7];
+                if (hit || c) {
+                    if (v.tiles) v.tiles->used(e, (e >> 13) & 3);
+                    out[x - xs].color = c ? uint8_t(h->pal | c) : 0;
+                    out[x - xs].prio = h->prio;
+                    continue;
+                }
+            }
+        }
         int tx = x & 7, yy = ty;
         if (e & 0x0800) tx = 7 - tx;
         if (e & 0x1000) yy = 7 - yy;
@@ -326,6 +370,7 @@ void Vdp::render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra) {
         uint32_t argb[64];
         for (int i = 0; i < 64; ++i) argb[i] = cram_to_rgb(cram[i]) | 0xFF000000u;
         tiles->refresh(vram, argb);
+        if (tiles->text.active(tiles->dumping)) tiles->text.refresh(*this, tiles->slot_hashes(), tiles->dumping);
     }
 
     LinePix a[kMaxWidth], b[kMaxWidth], s[kMaxWidth];

@@ -476,8 +476,10 @@ int main(int argc, char** argv) {
         // Character mods: <name>.ini files with [Palette] and [Stats].
         else if (a == "--characters") characters_dir = next();
         // Graphics replacements, as the frontend's Mods/Textures: Mega Drive
-        // tiles (md_<hash>.png) and 32X sprites (32x_*.png) from DIR; and
-        // the dump of both kinds drawn (--dump-tiles is its older name).
+        // tiles (md_<hash>.png), plane text by tile sequence (mdtext_*.txt
+        // with .png) and 32X sprites (32x_*.png) from DIR; and the dump of
+        // what is drawn, with the plane text runs on screen in DIR/Text
+        // (--dump-tiles is its older name).
         else if (a == "--tiles") tiles_dir = next();
         else if (a == "--dump-graphics" || a == "--dump-tiles") dump_tiles_dir = next();
         // Whole-bank sprite sheets (renderer/sprite_sheet.h): the characters'
@@ -703,6 +705,12 @@ int main(int argc, char** argv) {
         if (!tiles_dir.empty())
             std::printf("tiles: %d replacement(s) loaded\n", load_tile_pack(*m->vdp.tiles, tiles_dir, &messages));
         for (const auto& msg : messages) std::printf("tiles: %s\n", msg.c_str());
+        if (!tiles_dir.empty()) {
+            // Text replaced by tile sequence: mdtext_<name>.txt + .png.
+            messages.clear();
+            std::printf("text: %d pattern(s) loaded\n", load_text_pack(*m->vdp.tiles, tiles_dir, &messages));
+            for (const auto& msg : messages) std::printf("text: %s\n", msg.c_str());
+        }
         m->vdp.tiles->dumping = !dump_tiles_dir.empty();
     }
     // 32X sprite replacements from the same folder; the recorder is only
@@ -930,7 +938,13 @@ int main(int argc, char** argv) {
         const size_t first_sample = m->audio_out.size();
         const auto frame_t0 = std::chrono::steady_clock::now();
         m->run_frame();
-        if (!dump_tiles_dir.empty() && m->vdp.tiles) write_tile_dumps(*m->vdp.tiles, dump_tiles_dir);
+        if (!dump_tiles_dir.empty() && m->vdp.tiles) {
+            write_tile_dumps(*m->vdp.tiles, dump_tiles_dir);
+            // The plane text on screen, for mdtext_ patterns (the lockstep
+            // reference shares the replacer and lists nothing new).
+            write_text_dumps(*m->vdp.tiles, dump_tiles_dir + "/Text", m->framebuffer, m->fb_width, m->fb_height,
+                             kScreenWidth, m->fb_extra);
+        }
         if (!dump_tiles_dir.empty() && m->sprites) sprites_dumped += write_sprite_dumps(*m->sprites, dump_tiles_dir);
         {
             // The worst frames, not just the average: a stall now and then

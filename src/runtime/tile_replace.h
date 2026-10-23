@@ -12,6 +12,8 @@
 // Dumping records each tile the game draws, once, with the palette it was
 // drawn with, for modders to edit (the frontend writes them as PNG files).
 #pragma once
+#include "text_replace.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -31,12 +33,18 @@ public:
     // 0 is transparent, as in the original).
     void add(uint64_t hash, const std::array<uint8_t, 64>& indices) { by_hash_[hash] = indices; }
     size_t size() const { return by_hash_.size(); }
-    bool active() const { return dumping || !by_hash_.empty(); }
+    bool active() const { return dumping || !by_hash_.empty() || text.size(); }
 
     // Once a frame, before it is drawn: hash every VRAM slot and note which
     // ones hold a tile that has a replacement. Collects the tiles drawn since
     // the last refresh for dumping, with their palette (ARGB per CRAM entry).
     void refresh(const uint8_t* vram, const uint32_t* cram_argb64);
+
+    // Each VRAM slot's hash as of the last refresh.
+    const uint64_t* slot_hashes() const { return slot_hash_; }
+    // Text replaced by tile sequence (text_replace.h), matched against the
+    // slot hashes; refreshed after them.
+    TextReplacer text;
 
     // The replacement for VRAM tile `tile` (low 11 bits), or nullptr.
     const uint8_t* slot(uint32_t tile) const { return slot_[tile & (kSlots - 1)]; }
