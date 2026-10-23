@@ -243,6 +243,53 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
                 --stage 300:10:3:0:4:3:0 --fuzz 7:700:2400)
     set_tests_properties(lockstep_special_stage_variables PROPERTIES TIMEOUT 900)
 
+    # Issue #38: the bonus stage stayed 4:3. Its tunnel is a Mega Drive
+    # picture of rings, carried on into the margins; its items and polygons
+    # are drawn by the special stage's machinery (see patches.h, PolyScene).
+    # The margins must go live as the stage appears and stay for all of it;
+    # the native 320 columns must match a 4:3 machine's (give or take polygon
+    # edges); the interpreter and the recompiled code must agree; and the
+    # recorder must still rebuild every picture.
+    add_test(NAME bonus_stage_is_widescreen
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2400 --wide 53 --trace-wide
+                --stage 300:9:0:0:2:7:0 --fuzz 3:700:2400)
+    set_tests_properties(bonus_stage_is_widescreen PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "margins live from frame 4[5-6][0-9].*margins live for 1[3-9][0-9][0-9] frames in 1 stretches")
+    add_test(NAME bonus_stage_centre_matches_4_3
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2400 --wide 53 --compare-native
+                --min-centre-frames 1900 --stage 300:9:1:0:4:3:0)
+    add_test(NAME lockstep_bonus_stage_widescreen
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2400 --wide 53 --lockstep
+                --stage 300:9:0:0:2:7:0 --fuzz 3:700:2400)
+    add_test(NAME sprites_check_bonus_stage_widescreen
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3000 --stage 300:9:0:0:2:7:0 --fuzz 3:700:3000
+                --wide 80 --sprites-check)
+    set_tests_properties(bonus_stage_centre_matches_4_3 lockstep_bonus_stage_widescreen PROPERTIES TIMEOUT 900)
+    set_tests_properties(sprites_check_bonus_stage_widescreen PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "sprites check: [1-9][0-9]* pictures, [1-9][0-9]* bytes compared, 0 mismatches")
+    # Played from a level, the bonus stage keeps the level's game mode.
+    add_test(NAME bonus_stage_is_widescreen_in_the_level_mode
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1600 --wide 53 --trace-wide
+                --stage 300:9:0:0:2:7:0 --poke 600:DFDE:00 --poke 600:DFDF:18)
+    set_tests_properties(bonus_stage_is_widescreen_in_the_level_mode PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "margins live from frame 4[5-6][0-9].*margins live for 11[0-9][0-9] frames in 1 stretches")
+    # Issue #39: the results screen after a cleared special stage stayed 4:3.
+    # The stage is cut short (its rings, at SDRAM 0x7DF0, run out) and the
+    # result it would store on reaching the goal is put where the 68K reads
+    # it. The margins must stay live from the stage through the results, in
+    # one stretch; the centre must match 4:3; lockstep must hold.
+    set(_results --stage 300:10:0:0:2:7:0 --poke-sdram 1000:7DF0:03 --poke-fb 1200:1500:1FF:01)
+    add_test(NAME results_screen_is_widescreen
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1700 --wide 53 --trace-wide ${_results})
+    set_tests_properties(results_screen_is_widescreen PROPERTIES TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "margins live from frame 4[0-4][0-9].*margins live for 12[0-9][0-9] frames in 1 stretches")
+    add_test(NAME results_screen_centre_matches_4_3
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1700 --wide 53 --compare-native
+                --min-centre-frames 1200 ${_results})
+    add_test(NAME lockstep_results_screen_widescreen
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 1700 --wide 80 --lockstep ${_results})
+    set_tests_properties(results_screen_centre_matches_4_3 lockstep_results_screen_widescreen PROPERTIES TIMEOUT 900)
+
     # 32X sprite recording (issue #35, docs/SPRITES_32X.md). The host-side
     # rebuild of the blitters must be exact: random calls drawn by the game's
     # own blitter code (interpreted) and by the rebuild must write the same

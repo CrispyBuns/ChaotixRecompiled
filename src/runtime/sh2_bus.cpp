@@ -204,9 +204,8 @@ void Machine::vdp32x_write(uint32_t off, uint32_t v, int size) {
         if (sprites && sprites->tracks_writes()) sprites->fb_fill(*this, addr, mars.fill_len + 1u, mars.fill_data);
         if (wide_special) {
             uint8_t* shadow = fb_margin[mars.fb_display ^ 1];
-            if ((addr & 0xFF) == patches::kSpecialClearStart && mars.fill_len == patches::kSpecialClearLen &&
-                mars.fill_data == 0) {
-                // The stage's clear (see patches.h): the whole widened line.
+            if (patches::is_widened_clear(*this, addr, mars.fill_len + 1u, mars.fill_data)) {
+                // The scene's clear (see patches.h): the whole widened line.
                 const uint32_t line = (addr & 0xFF00) * 2u;
                 for (int x = -patches::kMaxWideExtra; x < kNativeWidth + patches::kMaxWideExtra; ++x) {
                     const uint32_t o = (line + uint32_t(x)) & 0x1FFFF;

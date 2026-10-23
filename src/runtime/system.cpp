@@ -352,7 +352,14 @@ void Machine::render_output_line(int src_line, int dst_row) {
     const int n = vdp.width() + 2 * extra;
     uint32_t md[Vdp::kMaxWidth];
     uint8_t bg[Vdp::kMaxWidth];
-    vdp.hidden_frame_tile = wide_special ? patches::kSpecialFrameTile : 0xFFFF;
+    // The bonus stage and the results screen use the whole screen.
+    const patches::PolyScene scene = patches::PolyScene(poly_scene);
+    const bool stage = wide_special && scene != patches::PolyScene::Bonus && scene != patches::PolyScene::Results;
+    vdp.hidden_frame_tile = stage ? patches::kSpecialFrameTile : 0xFFFF;
+    vdp.radial_lut = radial_lut;
+    vdp.radial_len = radial_len;
+    vdp.radial_cx2 = kNativeWidth;
+    vdp.radial_cy2 = kActiveLines;
     vdp.render_line(src_line, md, bg, extra);
     uint32_t* row = framebuffer + dst_row * kScreenWidth;
     render_line32x(src_line, row, extra, wide_active);
@@ -373,7 +380,8 @@ void Machine::render_output_line(int src_line, int dst_row) {
         // black out margin columns outside the level's camera range.
         patches::MarginCut cut{extra, extra};
         // The special stage's frame: black above and below its rectangle.
-        if (wide_special) cut = src_line < patches::kSpecialRect[2] || src_line > patches::kSpecialRect[3]
+        if (wide_special && !stage) cut = patches::MarginCut{};
+        else if (wide_special) cut = src_line < patches::kSpecialRect[2] || src_line > patches::kSpecialRect[3]
                                     ? patches::MarginCut{extra, extra} : patches::MarginCut{};
         else if (wide_active) cut = patches::margin_cut(*this, extra);
         for (int x = 0; x < cut.left; ++x) row[x] = 0xFF000000u;
@@ -397,13 +405,24 @@ void Machine::end_line() {
     }
 }
 
+namespace {
+void machine_sh2_hook(sh2::State* c, uint32_t pc) {
+    Machine* m = static_cast<Machine*>(c->hook_user);
+    patches::sh2_hook(*m, *c, pc);
+    if (m->sprites) sprite_sh2_hook(c, pc);
+}
+} // namespace
+
 void Machine::run_frame() {
     patches::begin_frame(*this);
     // The sprite recorder's hooks, on the master SH-2 (the only one that
     // draws). Set every frame: a copy of a machine shares the recorder but
     // must report its own state.
+    // The widened bonus stage moves its items' X there too (patches.h,
+    // kBonusItemReturn), before the recorder sees them.
     sh2::State& ms = sh2[0];
-    ms.hook = sprites ? sprite_sh2_hook : nullptr;
+    const bool bonus = wide_special && patches::PolyScene(poly_scene) == patches::PolyScene::Bonus;
+    ms.hook = bonus ? machine_sh2_hook : sprites ? sprite_sh2_hook : nullptr;
     ms.hook_user = this;
     ms.hook_pcs = patches::kSh2Hooks;
     ms.hook_count = patches::kSh2HookCount;

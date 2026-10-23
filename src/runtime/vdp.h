@@ -34,6 +34,13 @@ public:
     // stage hides the black columns its sprites frame the 4:3 picture with
     // (runtime/patches.h). 0xFFFF: none.
     uint16_t hidden_frame_tile = 0xFFFF;
+    // Host-only: plane A outside the native columns is a picture of
+    // concentric rings, given as colour (palette line 0) by distance from the
+    // centre (cx2 / 2, cy2 / 2) in quarter pixels; the widened bonus stage
+    // (runtime/patches.h, issue #38). radial_len 0: none.
+    const uint8_t* radial_lut = nullptr;
+    int radial_len = 0;
+    int radial_cx2 = 0, radial_cy2 = 0;
 
     // control port state
     bool cmd_pending = false;

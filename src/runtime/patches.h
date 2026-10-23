@@ -12,6 +12,9 @@
 namespace chaotix {
 class Machine;
 }
+namespace sh2 {
+struct State;
+}
 
 namespace chaotix::patches {
 
@@ -266,6 +269,62 @@ struct CentreAdd { uint32_t sdram; uint8_t reg; };
 constexpr CentreAdd kSpecialCentreAdds[] = {
     {0x414A, 0}, {0x4444, 4}, {0x4558, 0}, {0x45D0, 0}, {0x4C60, 0},
 };
+// Two more scenes are drawn by that polygon code, with the screen's own
+// rectangle (kFullRect) rather than the stage's (issues #38 and #39), and are
+// widened with the same machinery: the rectangle becomes [0, 319 + 2C], the
+// polygons are drawn C px further right and their pixels are moved back by C.
+// Only where the polygons get their X differs.
+//
+// The results screen after a cleared stage ("GOT THE CHAOS RING"). The master
+// SH-2, idle between commands, calls the routine at SDRAM 0x06007640 once a
+// vblank (0x060011C4); the special stage's SDRAM image (from ROM, at
+// kSdramImageRom + offset) has one there that draws the fixed list of polygons
+// at 0x06007688: a long `00 COLOUR FLAGS N`, then N vertices (int16 x, y), up
+// to a zero long. It is a 2D design laid out for 320 columns: every
+// background polygon touches x = 0 or x = 319. Widened, the list's vertices
+// get x + C, and those on the screen's edges go to the widened edges (0 and
+// 319 + 2C), so the background reaches the margins; nothing else moves. The
+// results screen only ever follows the stage, which is how it is told from
+// the stage's intro, the one other time this rectangle and code are loaded.
+//
+// The bonus stage (issue #38) draws its items with the blitters and a few
+// polygons, and clears each line it draws on with one fill: word 0 of the
+// line, length register kBonusClearLen, data 0 (kept whole, as the stage's
+// clear is). Its tunnel is a Mega Drive plane picture of concentric rings
+// that ends at the 4:3 edges. Each ring is a run of palette indices 1..12,
+// one index per w px, with w one more for every ring further out (1 px from
+// r = 80, then 2, 3, 4 at the screen's corners); the palette cycles them. The
+// margins carry the rings on (Vdp::radial_lut), measured from the picture
+// itself, so they cycle with it. A picture that is not rings centred on the
+// screen is not widened.
+enum class PolyScene : uint8_t { None, Stage, Results, Bonus };
+constexpr int16_t kFullRect[4] = {0, 319, 0, 223};
+constexpr uint32_t kSdramImageRom = 0x77800;
+constexpr uint32_t kResultsCodeSdram = 0x7640;
+constexpr uint32_t kResultsTableSdram = 0x7688;
+constexpr uint32_t kResultsTableEnd = 0x7818;
+constexpr uint16_t kBonusClearLen = 160;
+// The bonus stage's polygons come from the 68K as offsets from the screen
+// centre, which the boot code's handler ($06000CD0) puts at X 160 with
+// MOV #-96,R10 (then EXTU.B, SHLL16) followed by MOV #112,R11. Widened, that
+// immediate becomes 160 + C, and the polygons' pixels are moved back by C.
+constexpr uint32_t kBonusCentreSdram = 0x0CE6;
+constexpr uint16_t kBonusCentreNext = 0xEB70;
+constexpr int kBonusCentre = 160;
+// The same handler places the items it draws from that centre too, then
+// blits them scaled (kSh2BlitScaled) from 0x06000DF2, returning here. They are
+// drawn with the overwrite image, which is not moved back, so the hook there
+// takes the shift off their X instead (sh2_hook). The HUD and the items the
+// 68K places itself are blitted from elsewhere, unchanged.
+constexpr uint32_t kBonusItemReturn = 0x06000DF6;
+// Ring colours by radius, in quarter pixels, far enough for the corners of
+// the widest margins (r = 266 at kMaxWideExtra).
+constexpr int kRadialLen = 4 * 288;
+
+// The fill the widened scene clears a whole line with (the special stage's
+// or the bonus stage's), which then clears the margins too, unmoved.
+bool is_widened_clear(const Machine& m, uint32_t word_addr, uint32_t words, uint16_t data);
+
 // The level HUD (issue #28). The SH-2 draws SCORE, TIME and RINGS from the
 // 68K's HUD command ($06000C9C), at base positions that are immediates in the
 // boot code: MOV #32,R1 then MOV #16/#32/#48,R2. With Machine::wide_hud_edges
@@ -282,8 +341,8 @@ constexpr HudBase kHudBaseX[] = {
 constexpr int kHudX = 32;
 
 // The SH-2 immediates above change at run time: the special stage's ADD #80
-// pairs and the HUD's MOV #32. Code covering them used to fail validation and
-// run in the interpreter (the patches bumped sdram_code_epoch to make sure of
+// pairs, the HUD's MOV #32 and the bonus stage's centre. Code covering them
+// used to fail validation and run in the interpreter (the patches bumped sdram_code_epoch to make sure of
 // it), and those routines are the special stage's busiest (issue #31: it
 // lagged on a slow PC in widescreen). The recompiler emits
 // these instructions with the immediate byte read from SDRAM as they run, and
@@ -294,13 +353,17 @@ constexpr bool is_patched_sh2_immediate(uint32_t sdram) {
         if (sdram == c.sdram || sdram == c.sdram + 2) return true;
     for (const HudBase& h : kHudBaseX)
         if (sdram == h.sdram) return true;
-    return false;
+    return sdram == kBonusCentreSdram;
 }
 
 // The special stage is drawing its tube: its code is loaded and the stage's
 // own rectangle, or the widened one, is set (its intro and results use other
 // rectangles, and the levels the rectangle of other scenes).
 bool special_stage_active(const Machine& m);
+// The results screen and the bonus stage (see PolyScene).
+bool results_screen_active(const Machine& m);
+// Fills lut (kRadialLen entries) with the tunnel's ring colours.
+bool bonus_tunnel(const Machine& m, uint8_t* lut);
 
 // A frame counts as a level scene when the level engine's per-frame plane
 // update ran in the last 8 frames (it skips a few while a level loads), or,
@@ -349,6 +412,12 @@ MarginCut margin_cut(const Machine& m, int extra);
 // the 32X clip override. Runs identically in every machine, so lockstep
 // comparison still holds.
 void begin_frame(Machine& m);
+
+// The master SH-2's hooks at kSh2Hooks, while a scene needs them (the widened
+// bonus stage: kBonusItemReturn). Like the 68K hooks, they run before the same
+// instruction in the interpreter and the recompiled code, and depend only on
+// machine state, so lockstep holds.
+void sh2_hook(Machine& m, sh2::State& c, uint32_t pc);
 
 // Installs the hooks on the machine's 68K (called from Machine::reset).
 void install(Machine& m);

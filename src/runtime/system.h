@@ -174,10 +174,20 @@ public:
     uint64_t level_scene = 0;          // scene the level engine last ran in (patches.cpp)
     bool wide_active = false;          // margins show game content this frame
     bool clip_overridden = false;      // 32X clip rect widened by the patch
-    // The special stage is the widescreen scene this frame (wide_active is
-    // then also set). Its polygons are filled, not blitted: see patches.h.
+    // A scene drawn by the special stage's polygon code is the widescreen
+    // scene this frame (wide_active is then also set): the stage, its results
+    // screen or the bonus stage (poly_scene). Their polygons are filled, not
+    // blitted: see patches.h.
     bool wide_special = false;
     bool special_rect_overridden = false;  // its polygon clip rect widened
+    // Which polygon scene is widened (patches::PolyScene); wide_special is
+    // set for all of them.
+    uint8_t poly_scene = 0;
+    bool results_table_patched = false;  // the results screen's polygons widened
+    bool bonus_clip_overridden = false;  // the bonus stage's blitter clip widened
+    // The bonus stage's rings by radius (Vdp::radial_lut); render only.
+    uint8_t radial_lut[512 * 4] = {};
+    int radial_len = 0;
     int special_shift = 0;             // px its polygons are drawn right of true
     int cull_shift = 0;                // pending d2 offset inside the ring cull patch
     bool plane_fill_clamped = true;    // last plane fill used the unmasked (clamped) form
