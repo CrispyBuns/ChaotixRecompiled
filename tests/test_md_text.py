@@ -11,6 +11,11 @@ recompiled machine stays bit-identical to the interpreter. Without patterns
 a run without the replacer. A longer pattern beats a shorter one over the
 same tiles, and a wider centred image reaches past the run.
 
+On DATA LOAD, switching slots changes the palette line of the slots' name
+table entries during a picture; the slot's NEW (three rows of the 8x16
+font's big letters), given a solid image, stays replaced in every picture
+of the switch (0.7.0 showed the English NEW for one picture).
+
 No ROM-derived pixels are written by the test: the pattern holds hashes
 taken from the dump, the images are solid colours.
 
@@ -227,6 +232,85 @@ class MdText(unittest.TestCase):
         self.assertIn("mdtext_bad.txt: line 2: every row must have the same number of tiles", out)
         self.assertIn("mdtext_tall.txt: the image must be 8 pixels high per row of tiles", out)
         self.same_files(self.plain, d)
+
+
+def raw_rgb(path):
+    """The headless shots' rows of RGB bytes (they are written unfiltered)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    pos, idat, w = 8, b"", 0
+    while pos < len(data):
+        n, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        if kind == b"IHDR":
+            w = struct.unpack(">I", data[pos + 8:pos + 12])[0]
+            assert data[pos + 16:pos + 18] == bytes((8, 2)), "not 8-bit RGB"
+        elif kind == b"IDAT":
+            idat += data[pos + 8:pos + 8 + n]
+        pos += 12 + n
+    raw = zlib.decompress(idat)
+    stride = w * 3 + 1
+    assert all(raw[i] == 0 for i in range(0, len(raw), stride)), "filtered rows"
+    return [raw[i + 1:i + stride] for i in range(0, len(raw), stride)]
+
+
+def changed_pixels(a, b):
+    n = 0
+    for ra, rb in zip(raw_rgb(a), raw_rgb(b)):
+        if ra != rb:
+            n += sum(1 for i in range(0, len(ra), 3) if ra[i:i + 3] != rb[i:i + 3])
+    return n
+
+
+class DataLoadSlots(unittest.TestCase):
+    PRESS = ["--press", "1800:start:6", "--press", "1950:start:6", "--press", "2150:down:6", "--press", "2300:up:6"]
+    FIRST, LAST = 2140, 2400
+
+    def run_slots(self, *args):
+        r = subprocess.run([HEADLESS, "--rom", ROM, "--frames", str(self.LAST + 1), *self.PRESS, *args],
+                           capture_output=True, text=True, timeout=900)
+        return r.stdout + r.stderr
+
+    def test_switching_slots_shows_no_unreplaced_picture(self):
+        d = tempfile.mkdtemp(prefix="chaotix_mdtext_slots_")
+        self.run_slots("--frames", "2100", "--dump-graphics", os.path.join(d, "dump"))
+        # NEW: three runs of 7 tiles on one screen, each right below the one
+        # before.
+        new = None
+        for path in sorted(glob.glob(os.path.join(d, "dump", "Text", "text_*.txt"))):
+            with open(path, encoding="utf-8") as f:
+                runs = [(m.group(3), int(m.group(1)), int(m.group(2)), m.group(4).split()) for m in re.finditer(
+                    r"# run \d+: screen x (-?\d+) y (-?\d+).*\n(?:#.*\n)*plane (\w)\nrow (.*)\n", f.read())]
+            at = {(r[0], r[1], r[2]): r[3] for r in runs if len(r[3]) == 7}
+            for (plane, x, y), tokens in at.items():
+                if (plane, x, y - 8) not in at and (plane, x, y + 8) in at and (plane, x, y + 16) in at \
+                        and (plane, x, y + 24) not in at:
+                    new = [tokens, at[(plane, x, y + 8)], at[(plane, x, y + 16)]]
+                    break
+            if new:
+                break
+        self.assertIsNotNone(new, "no NEW in the dump")
+        mods = os.path.join(d, "mods")
+        os.makedirs(mods)
+        with open(os.path.join(mods, "mdtext_new.txt"), "w", encoding="utf-8") as f:
+            f.write("".join("row %s\n" % " ".join(row) for row in new))
+        write_indexed_png(os.path.join(mods, "mdtext_new.png"), 56, 24, [[1] * 56] * 24,
+                          [(0, 0, 0)] + [(255, 255, 255)] * 15)
+        shots = ",".join(str(f) for f in range(self.FIRST, self.LAST + 1))
+        plain, modded = os.path.join(d, "plain"), os.path.join(d, "modded")
+        os.makedirs(plain)
+        os.makedirs(modded)
+        self.run_slots("--shot", shots, "--out", plain)
+        out = self.run_slots("--tiles", mods, "--shot", shots, "--out", modded)
+        self.assertIn("text: 1 pattern(s) loaded", out, out[-2000:])
+        # A NEW is on screen all along (the slot's, and the next slot's as
+        # it slides in): each picture has at least one replaced in full.
+        short = []
+        for f in range(self.FIRST, self.LAST + 1):
+            name = "frame_%05d.png" % f
+            n = changed_pixels(os.path.join(plain, name), os.path.join(modded, name))
+            if n < 56 * 24:
+                short.append((f, n))
+        self.assertEqual(short, [], "pictures with NEW not replaced (frame, changed pixels)")
 
 
 if __name__ == "__main__":

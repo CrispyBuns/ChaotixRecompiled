@@ -342,6 +342,11 @@ wherever a plane shows it, and nowhere else. With DUMP GRAPHICS on, the runs
 of tiles on each screen are listed in `Mods/Textures/Dump/Text`, with a
 numbered screenshot, ready to copy. Details in
 [docs/TEXTURE_MODS.md](docs/TEXTURE_MODS.md#mega-drive-text-by-tile-sequence-mdtext_nametxt-and-mdtext_namepng).
+Text drawn with Mega Drive sprites (the menu banners' letters, PLAY STYLE,
+SOUND TEST, the 8x16 font's names) is replaced the same way by
+`mdsprite_<name>.txt` + `.png`, naming the group of sprites that shows it;
+the dump lists the sprites on screen in groups as `Dump/Text/sprites_<n>.txt`
+([details](docs/TEXTURE_MODS.md#mega-drive-text-by-sprite-mdsprite_nametxt-and-mdsprite_namepng)).
 
 ## Character mods
 

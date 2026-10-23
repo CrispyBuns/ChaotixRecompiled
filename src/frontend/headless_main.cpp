@@ -477,8 +477,9 @@ int main(int argc, char** argv) {
         else if (a == "--characters") characters_dir = next();
         // Graphics replacements, as the frontend's Mods/Textures: Mega Drive
         // tiles (md_<hash>.png), plane text by tile sequence (mdtext_*.txt
-        // with .png) and 32X sprites (32x_*.png) from DIR; and the dump of
-        // what is drawn, with the plane text runs on screen in DIR/Text
+        // with .png), text by sprite (mdsprite_*.txt with .png) and 32X
+        // sprites (32x_*.png) from DIR; and the dump of what is drawn, with
+        // the plane text runs and the sprite groups on screen in DIR/Text
         // (--dump-tiles is its older name).
         else if (a == "--tiles") tiles_dir = next();
         else if (a == "--dump-graphics" || a == "--dump-tiles") dump_tiles_dir = next();
@@ -728,7 +729,8 @@ int main(int argc, char** argv) {
             std::printf("tiles: %d replacement(s) loaded\n", load_tile_pack(*m->vdp.tiles, tiles_dir, &messages));
         for (const auto& msg : messages) std::printf("tiles: %s\n", msg.c_str());
         if (!tiles_dir.empty()) {
-            // Text replaced by tile sequence: mdtext_<name>.txt + .png.
+            // Text replaced by tile sequence (mdtext_<name>.txt + .png) and
+            // by sprite (mdsprite_<name>.txt + .png), counted together.
             messages.clear();
             std::printf("text: %d pattern(s) loaded\n", load_text_pack(*m->vdp.tiles, tiles_dir, &messages));
             for (const auto& msg : messages) std::printf("text: %s\n", msg.c_str());

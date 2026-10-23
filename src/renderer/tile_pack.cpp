@@ -160,6 +160,110 @@ int load_text_pack(TileReplacer& tiles, const std::string& dir, std::vector<std:
         if (!tiles.text.add(std::move(p), &error)) { say(name + ": " + error); continue; }
         ++loaded;
     }
+    return loaded + load_sprite_text(tiles, dir, messages);
+}
+
+int load_sprite_text(TileReplacer& tiles, const std::string& dir, std::vector<std::string>* messages) {
+    auto say = [messages](std::string m) { if (messages) messages->push_back(std::move(m)); };
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::vector<fs::path> files;
+    for (const auto& e : fs::directory_iterator(fs::u8path(dir), ec)) {
+        const std::string name = e.path().filename().u8string();
+        if (e.is_regular_file(ec) && name.size() > 13 && name.compare(0, 9, "mdsprite_") == 0 &&
+            name.compare(name.size() - 4, 4, ".txt") == 0)
+            files.push_back(e.path());
+    }
+    std::sort(files.begin(), files.end());  // the loading order breaks ties between patterns
+    auto lower = [](std::string s) {
+        for (auto& c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    auto integer = [](const std::string& w, int& out) {
+        char* end = nullptr;
+        const long n = std::strtol(w.c_str(), &end, 10);
+        if (w.empty() || !end || *end || n < -4096 || n > 4096) return false;
+        out = int(n);
+        return true;
+    };
+    int loaded = 0;
+    for (const auto& path : files) {
+        const std::string name = path.filename().u8string();
+        std::ifstream in(path);
+        if (!in) { say(name + ": cannot be read"); continue; }
+        SpriteTextReplacer::Pattern p;
+        p.name = name.substr(0, name.size() - 4);
+        std::string error, line;
+        int number = 0;
+        while (error.empty() && std::getline(in, line)) {
+            ++number;
+            const size_t comment = line.find_first_of("#;");
+            if (comment != std::string::npos) line.erase(comment);
+            std::istringstream words(line);
+            std::string key;
+            if (!(words >> key)) continue;
+            std::vector<std::string> args;
+            for (std::string w; words >> w;) args.push_back(w);
+            key = lower(key);
+            const std::string at = "line " + std::to_string(number) + ": ";
+            if (key == "sprite") {
+                SpriteTextReplacer::Member m;
+                if (args.size() < 4 || !integer(args[0], m.dx) || !integer(args[1], m.dy) ||
+                    !SpriteTextReplacer::parse_size_token(args[2], m.w, m.h, m.flips)) {
+                    error = at + "a sprite is \"sprite DX DY WxH\" (1-4 tiles each way, then :h, :v or :hv if "
+                                 "flipped), then its tiles";
+                    break;
+                }
+                if (int(args.size()) - 3 != m.w * m.h) {
+                    error = at + "a " + args[2] + " sprite has " + std::to_string(m.w * m.h) + " tiles";
+                    break;
+                }
+                for (size_t i = 3; i < args.size(); ++i) {
+                    uint64_t h;
+                    uint8_t f;
+                    if (!TextReplacer::parse_token(args[i], h, f) || f) {
+                        error = at + "\"" + args[i] + "\" is not a tile (16 hex digits; the flips go on the size)";
+                        break;
+                    }
+                    m.hashes.push_back(h);
+                }
+                p.members.push_back(std::move(m));
+            } else if (key == "palette") {
+                const std::string w = args.size() == 1 ? lower(args[0]) : "";
+                if (w == "any") p.palette = -1;
+                else if (w.size() == 1 && w[0] >= '0' && w[0] <= '3') p.palette = w[0] - '0';
+                else error = at + "palette is a palette line, 0 to 3, or any";
+            } else if (key == "align") {
+                const std::string w = args.size() == 1 ? lower(args[0]) : "";
+                if (w == "left") p.align = TextReplacer::Align::Left;
+                else if (w == "center" || w == "centre") p.align = TextReplacer::Align::Center;
+                else if (w == "right") p.align = TextReplacer::Align::Right;
+                else error = at + "align is left, center or right";
+            } else if (key == "offset") {
+                if (args.size() != 2 || !integer(args[0], p.offset_x) || !integer(args[1], p.offset_y))
+                    error = at + "offset is two numbers of pixels, X and Y";
+            } else {
+                error = at + "unknown entry \"" + key + "\" (sprite, palette, align or offset)";
+            }
+        }
+        if (error.empty() && p.members.empty()) error = "no sprite";
+        if (!error.empty()) { say(name + ": " + error); continue; }
+        const std::string png_name = p.name + ".png";
+        PngImage img;
+        if (!read_png((path.parent_path() / fs::u8path(png_name)).u8string(), img, &error)) {
+            say(png_name + ": " + error);
+            continue;
+        }
+        if (!img.indexed) {
+            say(png_name + ": must be a palette-indexed PNG (indices 1-15 of the first sprite's palette line, 0 transparent)");
+            continue;
+        }
+        p.width = img.width;
+        p.height = img.height;
+        p.indices = img.indices;
+        if (!tiles.sprite_text.add(std::move(p), &error)) { say(name + ": " + error); continue; }
+        ++loaded;
+    }
     return loaded;
 }
 
@@ -173,16 +277,17 @@ const uint8_t kDigits[10][5] = {
 
 } // namespace
 
-int write_text_dumps(TileReplacer& tiles, const std::string& dir, const uint32_t* pixels, int width, int height,
-                     int stride_pixels, int extra) {
-    auto& pending = tiles.text.pending;
+namespace {
+
+int write_dumps(std::vector<TextReplacer::Dump>& pending, const char* prefix, const std::string& dir,
+                const uint32_t* pixels, int width, int height, int stride_pixels, int extra) {
     if (pending.empty()) return 0;
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
     int written = 0;
     for (const auto& d : pending) {
         char base[64];
-        std::snprintf(base, sizeof base, "/text_%06llu", static_cast<unsigned long long>(d.frame));
+        std::snprintf(base, sizeof base, "/%s_%06llu", prefix, static_cast<unsigned long long>(d.frame));
         {
             std::ofstream out(std::filesystem::u8path(dir + base + ".txt"), std::ios::binary);
             out << d.text;
@@ -201,7 +306,10 @@ int write_text_dumps(TileReplacer& tiles, const std::string& dir, const uint32_t
                 for (int x = x0; x < x0 + w; ++x) put(x, y, c);
         };
         for (const auto& b : d.boxes) {
-            const uint32_t colour = b.plane == 'A' ? 0xFFFF40u : b.plane == 'B' ? 0x40FFFFu : 0xFF40FFu;
+            const uint32_t colour = b.plane == 'A'   ? 0xFFFF40u
+                                    : b.plane == 'B' ? 0x40FFFFu
+                                    : b.plane == 'S' ? 0x40FF40u
+                                                     : 0xFF40FFu;
             const int x0 = (b.x + extra) * 2 - 1, y0 = b.y * 2 - 1, x1 = (b.x + extra + b.w) * 2, y1 = (b.y + b.h) * 2;
             for (int x = x0; x <= x1; ++x) { put(x, y0, colour); put(x, y1, colour); }
             for (int y = y0; y <= y1; ++y) { put(x0, y, colour); put(x1, y, colour); }
@@ -223,6 +331,14 @@ int write_text_dumps(TileReplacer& tiles, const std::string& dir, const uint32_t
     }
     pending.clear();
     return written;
+}
+
+} // namespace
+
+int write_text_dumps(TileReplacer& tiles, const std::string& dir, const uint32_t* pixels, int width, int height,
+                     int stride_pixels, int extra) {
+    return write_dumps(tiles.text.pending, "text", dir, pixels, width, height, stride_pixels, extra) +
+           write_dumps(tiles.sprite_text.pending, "sprites", dir, pixels, width, height, stride_pixels, extra);
 }
 
 } // namespace chaotix

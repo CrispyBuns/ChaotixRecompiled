@@ -284,8 +284,7 @@ void render_plane(const Vdp& v, int line, bool planeA, LinePix* out, int xs, int
         if (hit) {
             // The image is drawn as it is (no flip), in the first tile's colours.
             TextReplacer::pixels(*hit, px & ~7, py, pw * 8, ph * 8, pix);
-            pal = hit->pal;
-            prio = hit->prio;
+            TextReplacer::colours(*hit, v.vram, pal, prio);
             hflip = false;
         } else if (const uint8_t* rp = v.tiles ? v.tiles->slot(e) : nullptr) {
             for (int k = 0; k < 8; ++k) pix[k] = rp[ty * 8 + k];
@@ -308,10 +307,12 @@ void render_plane(const Vdp& v, int line, bool planeA, LinePix* out, int xs, int
             // An image reaching past its run covers this tile where it is not 0.
             uint8_t ov[8];
             TextReplacer::pixels(*over, px & ~7, py, pw * 8, ph * 8, ov);
+            uint8_t opal, oprio;
+            TextReplacer::colours(*over, v.vram, opal, oprio);
             for (int i = 0; i < run; ++i)
                 if (const uint8_t c = ov[(px & 7) + i]) {
-                    out[x - xs + i].color = uint8_t(over->pal | c);
-                    out[x - xs + i].prio = over->prio;
+                    out[x - xs + i].color = uint8_t(opal | c);
+                    out[x - xs + i].prio = oprio;
                 }
         }
         x += run;
@@ -338,8 +339,10 @@ void render_window(const Vdp& v, int line, LinePix* out, int xs, int x0, int x1)
                 const uint8_t c = px8[x & 7];
                 if (hit || c) {
                     if (v.tiles) v.tiles->used(e, (e >> 13) & 3);
-                    out[x - xs].color = c ? uint8_t(h->pal | c) : 0;
-                    out[x - xs].prio = h->prio;
+                    uint8_t pal, prio;
+                    TextReplacer::colours(*h, v.vram, pal, prio);
+                    out[x - xs].color = c ? uint8_t(pal | c) : 0;
+                    out[x - xs].prio = prio;
                     continue;
                 }
             }
@@ -372,6 +375,8 @@ void Vdp::render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra) {
         for (int i = 0; i < 64; ++i) argb[i] = cram_to_rgb(cram[i]) | 0xFF000000u;
         tiles->refresh(vram, argb);
         if (tiles->text.active(tiles->dumping)) tiles->text.refresh(*this, tiles->slot_hashes(), tiles->dumping);
+        if (tiles->sprite_text.active(tiles->dumping))
+            tiles->sprite_text.refresh(*this, tiles->slot_hashes(), tiles->dumping);
     }
 
     LinePix a[kMaxWidth], b[kMaxWidth], s[kMaxWidth];
@@ -428,7 +433,19 @@ void Vdp::render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra) {
         // original pixels, so the game sees exactly what it would have; this
         // tracks them apart from what is drawn.
         uint8_t solid[kMaxWidth] = {};
-        const bool replacing = tiles && tiles->size();
+        // Text replaced by sprite (sprite_text.h): the matched groups whose
+        // sprites are as matched on this line are drawn from their images
+        // instead, each in its first member's place in the list (`place`
+        // keeps, per pixel, the list place of the sprite drawn there).
+        const SpriteTextReplacer* st =
+            tiles && !tiles->sprite_text.hits().empty() ? &tiles->sprite_text : nullptr;
+        bool st_live[SpriteTextReplacer::kMaxSprites] = {};
+        uint8_t place[kMaxWidth];
+        if (st) {
+            for (size_t h = 0; h < st->hits().size(); ++h) st_live[h] = st->unchanged_hit(vram, sat, int(h));
+            std::memset(place, 0xFF, sizeof place);
+        }
+        const bool replacing = tiles && (tiles->size() || st);
         while (count < max_sprites) {
             uint32_t e = sat + uint32_t(link) * 8;
             auto rw = [&](uint32_t o) { return uint16_t((vram[(e + o) & 0xFFFF] << 8) | vram[(e + o + 1) & 0xFFFF]); };
@@ -452,6 +469,9 @@ void Vdp::render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra) {
                 if (sxr == 0) { if (nonzero_x_seen) masked = true; }
                 else nonzero_x_seen = true;
                 const bool hidden = (pat & 0x7FF) == hidden_frame_tile && hs == 2 && vsz == 4 && (sx == 0 || sx == 304);
+                // A member of a replaced group: counted, not drawn.
+                const int st_hit = st ? st->hit_of(link) : -1;
+                const bool st_member = st_hit >= 0 && st_live[st_hit];
                 int row = line - sy;
                 if (pat & 0x1000) row = vsz * 8 - 1 - row;
                 for (int cx = 0; cx < hs * 8; ++cx) {
@@ -471,6 +491,7 @@ void Vdp::render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra) {
                             if (solid[i] && x >= 0 && x < width) sprite_collision = true;
                             solid[i] = 1;
                         }
+                        if (st_member) continue;
                         if (const uint8_t* rp = tiles->slot(tile)) c = rp[(row & 7) * 8 + (col & 7)];
                     }
                     if (!c) continue;
@@ -481,17 +502,46 @@ void Vdp::render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra) {
                         hidden_only[i] = 0;
                         s[i].color = uint8_t(((pat >> 9) & 0x30) | c);
                         s[i].prio = (pat >> 15) & 1;
+                        if (st) place[i] = uint8_t(count);
                         continue;
                     }
                     filled[i] = 1;
                     if (hidden) { hidden_only[i] = 1; continue; }
                     s[i].color = uint8_t(((pat >> 9) & 0x30) | c);
                     s[i].prio = (pat >> 15) & 1;
+                    if (st) place[i] = uint8_t(count);
                 }
             }
             link = sz & 0x7F;
             ++count;
             if (link == 0 || link >= max_sprites) break;
+        }
+        if (st) {
+            // The images, over the sprites after their first member in the
+            // list and under those before it, at the first member's place
+            // with its palette line and priority as they are now.
+            for (size_t h = 0; h < st->hits().size(); ++h) {
+                if (!st_live[h]) continue;
+                const SpriteTextReplacer::Hit& hit = st->hits()[h];
+                const uint32_t e = sat + uint32_t(hit.first) * 8;
+                auto rw = [&](uint32_t o) { return uint16_t((vram[(e + o) & 0xFFFF] << 8) | vram[(e + o + 1) & 0xFFFF]); };
+                const SpriteTextReplacer::Pattern& p = *hit.p;
+                const int iy = line - ((rw(0) & 0x3FF) - 128 + p.image_y);
+                if (iy < 0 || iy >= p.height) continue;
+                const int x0 = (rw(6) & 0x1FF) - 128 + p.image_x;
+                const uint16_t pat = rw(4);
+                const uint8_t pal = uint8_t((pat >> 9) & 0x30), prio = uint8_t((pat >> 15) & 1);
+                const uint8_t* src = p.indices.data() + size_t(iy) * size_t(p.width);
+                for (int k = 0; k < p.width; ++k) {
+                    const int x = x0 + k;
+                    if (x < xs || x >= xe || !src[k]) continue;
+                    const int i = x - xs;
+                    if (s[i].color && place[i] < hit.place) continue;
+                    s[i].color = uint8_t(pal | src[k]);
+                    s[i].prio = prio;
+                    place[i] = hit.place;
+                }
+            }
         }
     }
 

@@ -17,7 +17,10 @@
 // Colours are palette indices, as in md_ tiles: 1-15 of the palette line the
 // run's first tile is drawn with, 0 transparent, so fades and palette
 // changes (a highlighted menu entry) still apply. The priority bit is the
-// first tile's too.
+// first tile's too. Both are read as each line is drawn: a run whose entries
+// change only their palette line or priority during the picture (DATA LOAD
+// dims a slot that way) stays replaced, in the new colours; a cell whose
+// tile or flips change shows its tile.
 //
 // Output only, like the tile replacer: nothing here is read by the machine.
 //
@@ -65,8 +68,9 @@ public:
     struct Hit {
         int ox, oy;            // the image's top-left pixel in the plane (may wrap)
         const Pattern* p;
-        uint8_t pal;           // palette line << 4
+        uint8_t pal;           // palette line << 4, as matched
         uint8_t prio;
+        uint32_t entry0;       // the first cell's name table entry's address
     };
     struct Plane {
         int pw = 0, ph = 0;                  // in cells, as when matched
@@ -82,10 +86,19 @@ public:
         const Plane& p = planes_[i];
         return p.any && p.pw == pw && p.ph == ph ? &p : nullptr;
     }
-    // The hit drawn instead of cell `cell` showing entry `e`, or nullptr.
+    // The hit drawn instead of cell `cell` showing entry `e`, or nullptr: the
+    // entry's tile and flips must be as matched, its palette line and
+    // priority need not.
     static const Hit* run_hit(const Plane& p, int cell, uint16_t e) {
         const int h = p.run[size_t(cell)];
-        return h >= 0 && p.entry[size_t(cell)] == e ? &p.hits[size_t(h)] : nullptr;
+        return h >= 0 && ((p.entry[size_t(cell)] ^ e) & 0x1FFF) == 0 ? &p.hits[size_t(h)] : nullptr;
+    }
+    // The palette line (<< 4) and priority the hit is drawn with now: its
+    // first cell's.
+    static void colours(const Hit& h, const uint8_t* vram, uint8_t& pal, uint8_t& prio) {
+        const uint16_t e = uint16_t((vram[h.entry0 & 0xFFFF] << 8) | vram[(h.entry0 + 1) & 0xFFFF]);
+        pal = uint8_t((e >> 9) & 0x30);
+        prio = uint8_t((e >> 15) & 1);
     }
     static const Hit* over_hit(const Plane& p, int cell) {
         const int h = p.over[size_t(cell)];

@@ -764,7 +764,8 @@ void load_tiles(App& app) {
     std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
     const std::string readme = dir + "/README.txt";
     // Written when missing, and over the text of older versions: the first
-    // knew only the tiles, the next not the text patterns.
+    // knew only the tiles, the next not the text patterns, the next not the
+    // sprite text.
     bool write_readme = !std::filesystem::exists(std::filesystem::u8path(readme), ec);
     if (!write_readme) {
         if (FILE* f = std::fopen(readme.c_str(), "r")) {
@@ -774,7 +775,7 @@ void load_tiles(App& app) {
                 if (std::strncmp(first, "Graphics replacements.", 22) == 0) {
                     bool knows_text = false;
                     char line[256];
-                    while (!knows_text && std::fgets(line, sizeof line, f)) knows_text = std::strstr(line, "mdtext_") != nullptr;
+                    while (!knows_text && std::fgets(line, sizeof line, f)) knows_text = std::strstr(line, "mdsprite_") != nullptr;
                     write_readme = !knows_text;
                 }
             }
@@ -794,6 +795,9 @@ void load_tiles(App& app) {
                        "(menus written with letter tiles). The dump lists the runs of tiles on screen\n"
                        "in Dump/Text, with a numbered picture; copy a run's \"plane\" and \"row\" lines\n"
                        "into the .txt and draw the .png, 8 pixels high per row (docs/TEXTURE_MODS.md).\n"
+                       "mdsprite_<name>.txt with mdsprite_<name>.png: the same for text drawn with\n"
+                       "Mega Drive sprites (the menu banners' letters): Dump/Text/sprites_<n>.txt\n"
+                       "lists the sprites on screen in groups; copy a group's \"sprite\" lines.\n"
                        "32x_<bank>_<frame>.png, 32x_<hash>.png: 32X sprites (characters, the HUD,\n"
                        "objects, the title). The image's top-left corner stays where the original's\n"
                        "was; another size is drawn at its own size from there. The colour offsets the\n"

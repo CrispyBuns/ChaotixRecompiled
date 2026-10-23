@@ -24,15 +24,22 @@ int write_tile_dumps(TileReplacer& tiles, const std::string& dir);
 
 // Text replaced by tile sequence (runtime/text_replace.h): every pair of
 // mdtext_<name>.txt (the pattern) and mdtext_<name>.png (the image, palette-
-// indexed, 8 pixels high per row of the pattern) in `dir`. Returns how many
-// were loaded; `messages` says why any was skipped.
+// indexed, 8 pixels high per row of the pattern) in `dir`; and text replaced
+// by sprite (load_sprite_text). Returns how many were loaded; `messages`
+// says why any was skipped.
 int load_text_pack(TileReplacer& tiles, const std::string& dir, std::vector<std::string>* messages);
 
-// Writes the lists of on-screen tile runs the replacer has collected for
-// dumping to `dir` (created if needed) as text_<n>.txt, each with
-// text_<n>.png: the picture `pixels` (XRGB8888, `width` x `height`, the
-// native picture starting `extra` columns in) at twice the size, every run
-// boxed and numbered as in the list. Returns how many lists were written.
+// Text replaced by sprite (runtime/sprite_text.h): every pair of
+// mdsprite_<name>.txt (the sprites) and mdsprite_<name>.png (the image,
+// palette-indexed, any size) in `dir`. Returns how many were loaded.
+int load_sprite_text(TileReplacer& tiles, const std::string& dir, std::vector<std::string>* messages);
+
+// Writes the lists of on-screen tile runs and sprite groups the replacers
+// have collected for dumping to `dir` (created if needed) as text_<n>.txt
+// and sprites_<n>.txt, each with a .png of the same name: the picture
+// `pixels` (XRGB8888, `width` x `height`, the native picture starting
+// `extra` columns in) at twice the size, every run or group boxed and
+// numbered as in the list. Returns how many lists were written.
 int write_text_dumps(TileReplacer& tiles, const std::string& dir, const uint32_t* pixels, int width, int height,
                      int stride_pixels, int extra);
 

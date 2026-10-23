@@ -131,8 +131,9 @@ row c55f51f079e83c63 c47e6d034eb92447 61289eb94ebec2bf ee6410f28116fbcf c55f51f0
 - Inside the run the image replaces the tiles entirely: its 0 pixels show
   what is behind the plane (plane B, the backdrop, the 32X layer), as a
   tile's 0 pixels do. The run's tiles' `md_` replacements do not apply.
-- The image takes the first tile's priority bit, and is drawn as it is (a
-  flipped run's image is not flipped).
+- The image takes the first tile's palette line and priority bit as they
+  are when each line is drawn, and is drawn as it is (a flipped run's image
+  is not flipped).
 
 ### How it is matched
 
@@ -141,15 +142,20 @@ the patterns (indexed by their first tile, so the cost is small; nothing is
 done without a pattern). A match is a place in the plane, not on the screen,
 so it scrolls with the plane, by line or by column, as its tiles do. Where
 matches overlap the one with the most tiles wins (then the one whose file
-name sorts first). A cell whose name table entry changes during the picture
-shows its tile again. Like the other replacements this only changes the
-picture: the machine runs as without it, bit-identical in lockstep.
+name sorts first). A cell whose name table entry changes its tile or flips
+during the picture shows its tile again; a change of palette line or
+priority alone keeps the image, in the first tile's new colours (DATA LOAD
+dims and lights its slots that way while a picture is drawn; 0.7.0 showed
+the English text for that one picture). Like the other replacements this
+only changes the picture: the machine runs as without it, bit-identical in
+lockstep.
 
 Known limits:
 
 - Text on the 32X layer (the title's PUSH START and copyright, the HUD) is
   not on a plane; it is replaced as [32X sprites](#32x-sprites-32x_bank_framepng-and-32x_hashpng).
-  Sprites of the Mega Drive VDP are not matched either.
+  Text drawn with sprites of the Mega Drive VDP is replaced by
+  [sprite](#mega-drive-text-by-sprite-mdsprite_nametxt-and-mdsprite_namepng).
 - A pattern matches whole tiles. Text that the game draws at different tile
   offsets, or that changes one tile (a digit in DATA 1 / DATA 2), needs a
   pattern per variant (DATA 1, DATA 2, ...).
@@ -158,6 +164,119 @@ Known limits:
 - The dump lists the native 320-pixel screen, not the widescreen margins
   (patterns match there too), and samples each tile row in its middle: on a
   plane scrolled by a fraction of a tile per line the listed run can differ.
+
+## Mega Drive text by sprite: `mdsprite_<name>.txt` and `mdsprite_<name>.png`
+
+Some of the menus' Mega Drive text is drawn with the VDP's **sprites**, not
+on a plane: the big banners' letters (DATA LOAD, PLAY, DELETE, TRAINING,
+EXIT, PLAY STYLE, PLAYER SELECT; their blue ovals are plane tiles), PLAY
+STYLE's 1P / 2P / CPU, the SAVEMODE AUTO / MANUAL box, the 8x16 font when the
+game writes it with sprites (TRAINING's zone names, PLAYER SELECT's header
+and names, see [MENU_ART.md](MENU_ART.md)) and SOUND TEST's labels and
+titles. Their tiles are shared too: DATA LOAD is four sprites of 4x3 tiles,
+the letters straddle them, and the fourth sprite starts with the first one's
+tiles (the D). An `mdsprite_` pattern names **the sprites**, by their tiles,
+and draws an image instead of them, only where they appear together.
+
+### Finding the sprites
+
+The same DUMP GRAPHICS (`--dump-graphics DIR`) also writes
+`Dump/Text/sprites_<n>.txt` with `sprites_<n>.png` (green boxes): the
+sprites on screen, grouped into suggested patterns -- sprites on the same
+line (same Y and height) with the same palette line, side by side (at most 8
+pixels apart). Listed as the plane text is: once a new group has stayed in
+place for 10 pictures, at most every 30. From DATA LOAD, the PLAY banner:
+
+```
+# group 10: screen x 32 y 182, 2 sprites, 21 tiles, 56x24 pixels, palette line 0, priority 1
+#   entry 0 (list place 0) at 32,182, tile 28f
+#   entry 1 (list place 1) at 64,182, tile 29b
+sprite 0 0 4x3 c201ca0c81c8217a ec2112a45d4c3071 dbeeab7d6f977c77 75aca8175f4592c7 3ab6a123744c790b 5e0782ad57085e03 d4f66b2be90e7ce3 2f99af2edff6ac82 4c0fb2ca7a75840b 9d41d178c17f0d61 56d7fa498591f3bf dbeeab7d6f977c77
+sprite 32 0 3x3 cd9d0c4658f2da84 501a169d4c874f8f dbeeab7d6f977c77 2a3877ebf5817edb 262473a08d4ee92c 131ce9dedb1cb833 bf31e57f3efae0a6 171bb79dc8e18503 171bb79dc8e18503
+```
+
+A suggestion is only that: a group can hold a sprite that is not part of
+the text (drop its line) or miss one on another line (copy its line from its
+own group, with its offset: the `#` lines give each sprite's place on
+screen).
+
+### The pattern
+
+`Mods/Textures/mdsprite_<name>.txt` (any name; `mdsprite_play.txt`):
+
+```
+# PLAY on DATA LOAD
+align center
+sprite 0 0 4x3 c201ca0c81c8217a ec2112a45d4c3071 dbeeab7d6f977c77 75aca8175f4592c7 3ab6a123744c790b 5e0782ad57085e03 d4f66b2be90e7ce3 2f99af2edff6ac82 4c0fb2ca7a75840b 9d41d178c17f0d61 56d7fa498591f3bf dbeeab7d6f977c77
+sprite 32 0 3x3 cd9d0c4658f2da84 501a169d4c874f8f dbeeab7d6f977c77 2a3877ebf5817edb 262473a08d4ee92c 131ce9dedb1cb833 bf31e57f3efae0a6 171bb79dc8e18503 171bb79dc8e18503
+```
+
+- `sprite DX DY WxH TILE...`: one sprite. `DX DY` is where it is, in
+  pixels; only the distances between the sprites count (the first line is
+  the anchor, so screen coordinates work as well as the dump's offsets).
+  `WxH` is its size in tiles (1-4 each way), with `:h`, `:v` or `:hv` after
+  it for a flipped sprite (it then only matches flipped the same way). Then
+  its W x H tiles' hashes in the order the VDP stores them, **column by
+  column** (top to bottom, then the next column), as the dump writes them,
+  whatever the flip.
+- `palette 0`-`3`: matches only when the first sprite is drawn with that
+  palette line; `any` (the default) matches whatever the line.
+- `align left` (the default), `center` or `right`: where the image sits
+  across the sprites' bounding box when it is not as wide.
+- `offset X Y`: moves the image by that many pixels (negative: left or up).
+- `#` or `;` starts a comment.
+
+### The image
+
+`mdsprite_<name>.png`, next to the `.txt`:
+
+- **Palette-indexed**: indices 1-15 are the colours of the **first
+  sprite's** palette line (as it is when each line is drawn), 0 is
+  transparent. Full-colour PNGs are refused.
+- **Any size** (up to 1024 x 512). Its top-left is the sprites' bounding
+  box's top-left (moved by `align` and `offset`): an image of the box's size
+  (56x24 for PLAY) covers the sprites exactly; a larger one reaches past
+  them, over whatever is there.
+- The matched sprites are not drawn at all, so where the image is 0 what is
+  behind them shows (the oval, the background).
+- The image is drawn as one sprite in the **first sprite's place** in the
+  sprite list: in front of the sprites after it in the list and behind the
+  sprites before it, and in front of or behind the planes as the first
+  sprite's priority bit says. It is not flipped.
+
+### How it is matched
+
+Once a picture, before it is drawn, the sprite table is followed along its
+links, as the VDP does. A match is a sprite showing the first line's tiles,
+size and flip with, for each other line, a sprite showing its tiles exactly
+that many pixels away (on screen, not in the list: the game may list them in
+any order). Where matches share sprites the pattern with the most tiles wins
+(then the one whose file name sorts first), so a pattern for one banner can
+be followed by patterns for its sprites alone without them breaking it.
+Patterns are indexed by their first tile; nothing is done without a pattern.
+
+While the picture is drawn, a matched group whose sprites move or change
+tiles is drawn as it is from that line on (its original sprites, no image);
+a change of palette line or priority keeps the image. The status flags the
+game reads (sprite collision, overflow) still come from the original
+sprites, and the machine runs as without the mod, bit-identical in lockstep.
+
+Known limits:
+
+- A group is matched on one picture's table. Text the game draws with its
+  sprites on alternate pictures (flickering, multiplexed), or whose sprites
+  are placed one picture apart, matches on the pictures where the whole
+  group is there; on others the English sprites show.
+- The image is not cut by sprite masking (an X=0 sprite) or by the VDP's
+  sprites-per-line limit, which would have cut the original sprites, and it
+  does not count towards them (the flags follow the originals).
+- A sprite listed twice in a pattern, or two groups sharing a sprite, are not
+  both drawn: one sprite belongs to one match.
+- Each pattern names exact tiles: a letter whose tiles the game animates (a
+  blinking cursor in the text) needs a pattern per frame of the animation,
+  and the same word at another distance (PLAYER SELECT's letters spaced
+  differently) another pattern.
+- The dump lists the native 320-pixel screen; widescreen margins match too.
 
 ## 32X sprites: `32x_<bank>_<frame>.png` and `32x_<hash>.png`
 
@@ -342,12 +461,31 @@ Known limits:
   required one; a cell changed after the match; the window plane; malformed
   patterns; the tokens; the dump listing the runs once, and a moving run only
   once it stops.
+- `sprite_text.*` unit tests: a sprite drawn from the image and only
+  there (another size of the same tiles not); the image's size, alignment
+  and offset; flips matched by their flip; a group matching only at its
+  distances, with offsets in any coordinates; the group with the most tiles
+  winning; the image in its first member's place among the sprites; the
+  collision flag following the original sprites; a palette change during
+  the picture keeping the image and a move bringing the sprites back; a
+  required palette line; malformed patterns and size tokens; no change
+  without a match; the dump's groups, listed once.
+- `md_sprite_text` (with the ROM): DATA LOAD's banner letters found in the
+  dump (four 4x3 sprites) and given a synthetic solid image change the
+  picture inside the banner's box only, the title not at all, in lockstep; a
+  pattern of one of its sprites loses to the group; a narrower centred image
+  colours only its columns; no pattern, or one matching nothing, leaves the
+  pictures byte-identical; malformed patterns and full-colour images are
+  refused with a message.
 - `md_text` (with the ROM): the title menu's OPTIONS run found in the dump
   and given a synthetic solid image changes the menu picture inside its box
   only, the title before the menu not at all, in lockstep; a longer pattern
   wins over a shorter one; a wider centred image reaches past the run; no
   pattern, or one matching nothing, leaves the pictures byte-identical;
-  malformed patterns are refused with a message.
+  malformed patterns are refused with a message. On DATA LOAD, switching
+  slots down and back with the slot's NEW given a solid image: every picture
+  of the 261 has a NEW replaced in full (0.7.0 showed the English one in two
+  of them, where the palette line changed during the picture).
 - `sprite_replace.*` unit tests: a dumped graphic as its own replacement draws
   exactly the original with every flag, odd positions, the colour offset,
   both scaled blitters; replaced pixels flipped, scaled, stippled, coloured

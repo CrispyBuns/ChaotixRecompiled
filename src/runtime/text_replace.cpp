@@ -154,7 +154,8 @@ void TextReplacer::match(const Vdp& v, int pl, const uint64_t* slot_hash) {
         if (p.align == Align::Center) off = (p.cols * 8 - p.width) / 2;
         else if (p.align == Align::Right) off = p.cols * 8 - p.width;
         const int ox = ((c.cx * 8 + off) % wpx + wpx) % wpx;
-        P.hits.push_back({ox, c.cy * 8, &p, uint8_t((e0 >> 9) & 0x30), uint8_t((e0 >> 15) & 1)});
+        const uint32_t ea0 = (g.nt + uint32_t((c.cy * g.pw + c.cx) * 2)) & 0xFFFF;
+        P.hits.push_back({ox, c.cy * 8, &p, uint8_t((e0 >> 9) & 0x30), uint8_t((e0 >> 15) & 1), ea0});
         for (int r = 0; r < p.rows; ++r)
             for (int k = 0; k < p.cols; ++k) {
                 const int cx = (c.cx + k) % g.pw, cy = (c.cy + r) % g.ph;

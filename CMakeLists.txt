@@ -56,6 +56,7 @@ add_library(chaotix_runtime STATIC
     src/runtime/vdp.cpp
     src/runtime/tile_replace.cpp
     src/runtime/text_replace.cpp
+    src/runtime/sprite_text.cpp
     src/runtime/sprite_record.cpp
     src/runtime/sprite_replace.cpp
     src/runtime/character_mods.cpp

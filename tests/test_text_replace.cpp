@@ -174,6 +174,24 @@ TEST(text_replace, a_cell_changed_since_the_match_shows_its_tile) {
     CHECK_EQ(after[8], rgb(kRedC));
 }
 
+TEST(text_replace, a_palette_or_priority_change_since_the_match_keeps_the_image) {
+    // DATA LOAD dims a slot by changing its entries' palette line during a
+    // picture: the run stays replaced, in the first cell's new colours.
+    auto v = scene();
+    add(v, pattern({tile_hash(v, 1), tile_hash(v, 2)}, 16, 3));
+    new_frame(v);
+    const uint32_t row = 0xC000 + uint32_t((kLine / 8) * kCells * 2);
+    word(v, row + 0, 1 | 0x2000 | 0x8000);
+    word(v, row + 2, 2 | 0x2000);
+    const auto after = render(v);
+    CHECK_EQ(after[0], rgb(kWhiteC));
+    CHECK_EQ(after[15], rgb(kWhiteC));
+    CHECK_EQ(after[16], rgb(kRedC));
+    // A flip is a change of tile: that cell shows its tile.
+    word(v, row + 2, 2 | 0x0800);
+    CHECK_EQ(render(v)[8], rgb(kGreenC));
+}
+
 TEST(text_replace, the_window_plane_is_matched_too) {
     auto v = scene();
     v.reg[3] = 0x2C;   // window at B000
