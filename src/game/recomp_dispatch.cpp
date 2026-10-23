@@ -270,14 +270,17 @@ RecompStatus install_recompiled_code(Machine& m, bool enable) {
         else if (area == 6) m.cache_code_ranges.push_back({r.addr & 0xFFF, (r.addr & 0xFFF) + r.len});
     }
     m.remap_sh2();
-    // A ROM patch over code that runs straight from ROM (or literals folded
-    // from it) would be ignored by the generated code: that CPU interprets.
+    // The checked-in generated tables may predate ROM-code range metadata.
+    // Without that metadata, we cannot safely determine whether a ROM patch
+    // overlaps code that was statically recompiled. Conservatively fall back
+    // to interpreters for both CPUs whenever any ROM patch is active.
+    // This avoids unresolved g_rom_code symbols and prevents stale native code
+    // from ignoring runtime ROM patches. Unpatched runs keep full recompilation.
     bool patched_code[2] = {false, false};
-    for (const auto& [off, len] : m.rom.patched)
-        for (size_t i = 0; i < recomp::g_rom_code_count; ++i) {
-            const recomp::RomCode& rc = recomp::g_rom_code[i];
-            if (rc.len && off < rc.rom_off + rc.len && rc.rom_off < off + len) patched_code[rc.cpu & 1] = true;
-        }
+    if (!m.rom.patched.empty()) {
+        patched_code[0] = true;
+        patched_code[1] = true;
+    }
     if (!patched_code[0]) m.exec.m68k_block = m68k_exec;
     recomp::g_sdram_code_epoch = &m.sdram_code_epoch;
     if (!patched_code[1]) m.exec.sh2_block = sh2_exec;
